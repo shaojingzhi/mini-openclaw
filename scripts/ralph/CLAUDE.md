@@ -12,8 +12,11 @@ You are an autonomous coding agent working on a software project.
 6. Run quality checks (e.g., typecheck, lint, test - use whatever your project requires)
 7. Update CLAUDE.md files if you discover reusable patterns (see below)
 8. If checks pass, commit ALL changes with message: `feat: [Story ID] - [Story Title]`
-9. Update the PRD to set `passes: true` for the completed story
-10. Append your progress to `progress.txt`
+9. Push the branch to origin (proxy is required for GitHub access):
+   `source "$HOME/.config/opencode/github-proxy.env" && git push -u origin HEAD`
+10. Update the PRD to set `passes: true` for the completed story
+11. Append your progress to `progress.txt`
+12. Commit and push the PRD/progress updates with message: `chore: [Story ID] - update progress`
 
 ## Progress Report Format
 

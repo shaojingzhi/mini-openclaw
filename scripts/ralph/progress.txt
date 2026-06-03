@@ -17,7 +17,10 @@ Started: 2026年 6月 4日 星期四 00时57分56秒 CST
 - `langchain_experimental.llm_bash.bash.BashProcess` has no `cwd` parameter — to pin a shell tool to a sandbox root, prefix every command with `cd <shlex.quoted-root> && (...)` before delegating to `ShellTool().process.run(...)`. Don't reach for `subprocess` directly; the PRD §2.3 wording is "wrap" the LangChain tool.
 - Tests live in `backend/tests/test_<module>.py` using stdlib `unittest` (no pytest in requirements yet). Run them in the venv with `/tmp/mini-openclaw-test-venv/bin/python -W ignore -m unittest backend.tests.test_<module> -v` — the `-W ignore` silences the noisy `langchain-community`/`langchain-experimental` "being sunset" deprecation warnings emitted at import.
 - `langchain-community` and `langchain-experimental` are both formally sunset; their deprecation warnings are expected, not actionable. The PRD intentionally pins them because that's where `ShellTool`/`RequestsGetTool`/`ReadFileTool`/`PythonREPLTool` still live in the 0.4.x line we pinned in US-002.
-- Tool-wrapping pattern (US-004/005, applies to US-006/007): instantiate the underlying LangChain tool ONCE at module scope as a private singleton (e.g. `_SHELL_TOOL`, `_REPL_TOOL`), then expose a thin `@tool("<name>")`-decorated function whose typed signature drives the new `args_schema`. Call the singleton via `.invoke(...)` or its `.process.run(...)` for sandbox-prefixed bash. Tools normally return stdout WITH a trailing newline; `.rstrip()` is a safe normalisation (use `.splitlines()` later if line counts matter).
+- Tool-wrapping pattern (US-004/005/006, applies to US-007): instantiate the underlying LangChain tool ONCE at module scope as a private singleton (e.g. `_SHELL_TOOL`, `_REPL_TOOL`, `_REQUESTS_TOOL`), then expose a thin `@tool("<name>")`-decorated function whose typed signature drives the new `args_schema`. Call the singleton via `.invoke(...)` or its `.process.run(...)` for sandbox-prefixed bash. Tools normally return stdout WITH a trailing newline; `.rstrip()` is a safe normalisation (use `.splitlines()` later if line counts matter).
+- Patching LangChain tools in tests: `RequestsGetTool`, `TextRequestsWrapper`, `ShellTool`, and most other `langchain_community`/`langchain_core` tools are Pydantic-v2 models with `model_config` that forbids attribute mutation. `unittest.mock.patch("...x.y")` where `y` is an attribute on a Pydantic instance will fail at teardown with `'<Model>' object has no attribute 'y'` from the model's `__delattr__`. Workaround: patch the module-level singleton itself with a `MagicMock` (e.g. `patch("backend.tools.fetch_url._REQUESTS_TOOL", stub)`) and configure `stub.invoke.return_value = ...`. Applies to US-007 read_file tests and the US-012 mocked-LLM agent test.
+- `RequestsGetTool` construction requires `allow_dangerous_requests=True` — the `BaseRequestsTool.__init__` explicitly raises `ValueError` otherwise. The flag is named after the upstream LangChain security guidance, not because anything we do is more dangerous than a normal HTTP GET.
+- `html2text.HTML2Text()` line-wraps to 78 cols by default, which scrambles paragraphs. Always set `converter.body_width = 0` before `.handle()` so paragraphs stay on a single line — this matters for LLM consumption.
 ---
 
 ## 2026-06-04 - US-001
@@ -125,4 +128,33 @@ Started: 2026年 6月 4日 星期四 00时57分56秒 CST
   - Modern `@tool("<name>")` decorator from `langchain_core.tools` produces a `StructuredTool` whose `args_schema` is auto-built from the function's type hints. Invoking with `tool.invoke({"arg": value})` always works; `tool.invoke(value)` works for single-arg tools too.
   - `langchain_community` and `langchain_experimental` both print deprecation warnings on import — expected, see codebase pattern above. Don't try to "fix" them by migrating away; that's not in scope until the PRD is rewritten.
   - The `_run_in_root` helper uses `shlex.quote(str(PROJECT_ROOT))` so paths with spaces won't break the `cd` prefix. Apply the same pattern in future tools that compose shell strings.
+---
+
+## 2026-06-04 - US-006
+- Implemented the `fetch_url` agent tool with HTML→Markdown post-processing.
+- Files changed:
+  - `backend/tools/fetch_url.py` (new — `@tool("fetch_url")` wrapping `langchain_community.tools.RequestsGetTool`; passes raw HTML through `_clean_html` which decomposes `<script>`/`<style>` with BeautifulSoup then converts to Markdown via `html2text` with `body_width=0`).
+  - `backend/tools/__init__.py` (re-export `fetch_url`; `__all__` re-sorted alphabetically: fetch_url, python_repl, terminal).
+  - `backend/tests/test_fetch_url.py` (new — 3 unittest cases: script/style stripping incl. tag-name removal; Markdown structure preservation for h1/link/bullets; full `fetch_url.invoke({"url": ...})` path with `_REQUESTS_TOOL` stubbed at module level).
+- Design notes:
+  - `RequestsGetTool.__init__` (via `BaseRequestsTool`) raises `ValueError` unless `allow_dangerous_requests=True` is passed — the flag is mandatory, not optional, so it lives in the singleton constructor.
+  - Wrapper is `TextRequestsWrapper()` with defaults — the agent never needs JSON-typed responses from this tool.
+  - `_clean_html` runs BeautifulSoup with the `html.parser` backend (no lxml dep in requirements.txt) and uses `soup(("script", "style"))` + `.decompose()` to remove both tags AND their text content in one pass.
+  - `html2text` configured with `body_width=0`, `ignore_images=False`, `ignore_links=False` — keep all link/image markup so the agent can decide what to follow.
+  - Output is `.rstrip()`-ed for consistency with `python_repl` (test asserts no trailing newline).
+- Test wrinkles I hit:
+  - First attempt patched `_REQUESTS_TOOL.invoke` — Pydantic-v2 model rejected `delattr` at teardown. Same with `_REQUESTS_TOOL.requests_wrapper.get`.
+  - Working approach: replace the whole `_REQUESTS_TOOL` module attribute with a `MagicMock` for the test, configure `stub.invoke.return_value = _FIXTURE_HTML`, assert `stub.invoke.assert_called_once_with({"url": "..."})`. Added a Codebase Pattern about this above so US-007 / US-012 don't have to rediscover it.
+- Verification:
+  - `python3 -m py_compile backend/tools/fetch_url.py backend/tools/__init__.py backend/tests/test_fetch_url.py` → clean.
+  - `/tmp/mini-openclaw-test-venv/bin/python -W ignore -m unittest backend.tests.test_fetch_url -v` → 3/3 OK in 0.007s.
+  - Full suite (`test_fetch_url` + `test_python_repl` + `test_terminal`) → 10/10 OK.
+- **Learnings for future iterations:**
+  - When a LangChain tool wraps a Pydantic-v2 model, NEVER try to monkey-patch instance attributes in tests — Pydantic's `__delattr__` will explode at `patch` teardown. Stub the whole module-level singleton instead. This pattern likely applies to:
+    - US-007 read_file: `ReadFileTool` is a Pydantic-v2 model — same trick.
+    - US-012 agent smoke test: when mocking the LLM, swap the whole `ChatOpenAI` instance, don't patch a method on it.
+  - `BaseRequestsTool` explicitly demands `allow_dangerous_requests=True`. Do NOT silently default it to True in shared library code without surfacing it in the constructor — make the security trade-off visible at the call site.
+  - `bs4` is installed via the `beautifulsoup4==4.14.3` pin from US-002 with `soupsieve` as a transitive — confirmed importable in the test venv. The `html.parser` backend is stdlib, so we don't need `lxml`.
+  - `html2text` defaults wrap lines at 78 columns, which makes paragraph text unreadable. Always set `body_width = 0`.
+  - Future tools that produce text for the LLM should follow the same shape: `_clean_<x>` private helper, public `@tool` function does only the dispatch + cleaning, both `.rstrip()` the result.
 ---

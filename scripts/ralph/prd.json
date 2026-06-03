@@ -97,8 +97,8 @@
         "Typecheck passes"
       ],
       "priority": 6,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented backend/tools/fetch_url.py as a `@tool(\"fetch_url\")` wrapping langchain_community RequestsGetTool with a BeautifulSoup-strip + html2text post-processor (script/style decomposed, body_width=0, trailing whitespace stripped). Required `allow_dangerous_requests=True` on RequestsGetTool init (otherwise the base class refuses to construct). Re-exported from backend/tools/__init__.py. 3 unittest cases in backend/tests/test_fetch_url.py: script/style stripping, Markdown structure preserved (h1/link/list bullets), and the full fetch_url path with `_REQUESTS_TOOL` stubbed at module scope. All 10 backend tests pass."
     },
     {
       "id": "US-007",
