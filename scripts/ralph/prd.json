@@ -30,8 +30,8 @@
         "Typecheck passes"
       ],
       "priority": 2,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Pinned all 13 requested deps + uvicorn[standard]. Verified `pip install --dry-run -r backend/requirements.txt` resolves cleanly in a fresh venv on Python 3.14 (no conflicts/incompatible markers). LangChain pinned to 1.3.4 (latest 1.x stable)."
     },
     {
       "id": "US-003",
