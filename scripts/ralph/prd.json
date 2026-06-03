@@ -47,8 +47,8 @@
         "Typecheck passes"
       ],
       "priority": 3,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Seeded SOUL.md, IDENTITY.md, USER.md, AGENTS.md under backend/workspace/ and MEMORY.md under backend/memory/. AGENTS.md SKILL PROTOCOL block is verbatim from PRD §4.3; added a concrete Memory Protocol section (PRD left this as `...`). Removed backend/workspace/.gitkeep since the dir now holds real files. SKILLS_SNAPSHOT.md intentionally NOT created — that is US-009."
     },
     {
       "id": "US-004",
