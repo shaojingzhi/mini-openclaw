@@ -150,8 +150,8 @@
         "Typecheck passes"
       ],
       "priority": 9,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented backend/skills_loader.py with `build_skills_snapshot(skills_dir=None, *, write=True, snapshot_path=None) -> str`. Scans `skills_dir/*/SKILL.md` (sorted), parses YAML frontmatter via `yaml.safe_load` (PyYAML is a stable transitive of langchain-core / langchain-community / langchain-classic / llama-index-core — not pinned directly to avoid expanding US-002's dep set). `_FRONTMATTER_RE = r'\\A---[ \\t]*\\n(.*?)\\n---[ \\t]*(?:\\n|\\Z)'` handles both trailing-newline and EOF-terminated frontmatter blocks. `name` defaults to the skill folder name when frontmatter is missing/invalid; `description` defaults to empty string. `location` is always emitted as `./backend/skills/<folder>/SKILL.md` so the agent's `read_file` tool (root_dir=PROJECT_ROOT) can resolve it directly — even when tests pass a temp `skills_dir`. XML special chars are escaped via `xml.sax.saxutils.escape`. Missing/non-directory skills_dir returns the empty `<available_skills>\\n</available_skills>` wrapper instead of crashing (matches US-008 graceful-empty pattern). 7 unittest cases in backend/tests/test_skills_loader.py: valid frontmatter, alphabetical sort across multiple skills, empty dir, missing dir, missing frontmatter falls back to folder name, XML-escaping of `<` `&` `\"`, and write-to-disk persistence. All 25 backend tests pass. Seeded `backend/workspace/SKILLS_SNAPSHOT.md` with the (currently empty) wrapper by running the bootstrap once."
     },
     {
       "id": "US-010",

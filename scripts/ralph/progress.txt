@@ -29,6 +29,9 @@ Started: 2026年 6月 4日 星期四 00时57分56秒 CST
 - LlamaIndex persistence sentinel: presence of `<storage_dir>/docstore.json` means a valid index exists and can be reloaded with `StorageContext.from_defaults(persist_dir=...)` + `load_index_from_storage(ctx)`. Wrap the reload in `try/except` and fall back to a rebuild — corrupt persist dirs should never crash a tool.
 - `BM25Retriever.from_defaults(nodes=...)` is the right entry point for ad-hoc indexes; it takes a list of `BaseNode` (use `list(index.docstore.docs.values())` after building a `VectorStoreIndex`). If `similarity_top_k` exceeds the corpus size, bm25s prints a warning and silently clamps to `len(nodes)` — that warning is benign.
 - `backend/storage/` is ALREADY in `.gitignore` (since US-001 wave). `backend/knowledge/` is empty by design with a `.gitkeep`; the search tool gracefully reports `EMPTY_KB_MESSAGE` if the folder has no readable files or doesn't exist.
+- `PyYAML 6.0.3` is a stable TRANSITIVE dep (required by langchain-core, langchain-community, langchain-classic, llama-index-core) — `import yaml` is safe anywhere in `backend/` without adding to `requirements.txt`. The same is true for other heavy transitives: check `pip show <pkg>` in `/tmp/mini-openclaw-test-venv` before deciding to pin a new direct dep that may already be present.
+- YAML frontmatter parsing: use regex `r"\A---[ \t]*\n(.*?)\n---[ \t]*(?:\n|\Z)"` with `re.DOTALL` to extract the block, then `yaml.safe_load` it. Handles both newline-terminated and EOF-terminated `---` fences. Fall back to defaults (folder name, empty string) when frontmatter is missing or `yaml.safe_load` raises — never crash a bootstrap pass.
+- Tests using `tempfile.TemporaryDirectory()` must keep ALL file-existence assertions INSIDE the `with` block. The tempdir is removed on `__exit__`; any `path.exists()` outside the block will return False even if the file was correctly created. (Bit me once on US-009's persistence test.)
 ---
 
 ## 2026-06-04 - US-001
@@ -220,4 +223,32 @@ Started: 2026年 6月 4日 星期四 00时57分56秒 CST
   - The persisted storage dir (`backend/storage/`) is gitignored. Don't commit anything into it. The `_build_or_load_index` reload path uses `docstore.json` presence as the sentinel.
   - `bm25s.BM25 requires k less than or equal to number of nodes added. Overriding ...` is a benign info-log from bm25s when corpus < top_k — not a test failure signal, just noisy. Tests should NOT assert on stderr.
   - `QueryFusionRetriever` fusion modes: `"simple"` (concat+dedupe), `"reciprocal_rerank"` (RRF, our default), `"relative_score"`, `"dist_based_score"`. RRF works well when BM25 and vector scores have wildly different scales (which they do here, especially with MockEmbedding).
+---
+
+## 2026-06-04 - US-009
+- Implemented the Skills bootstrap that scans `backend/skills/*/SKILL.md` and emits `<available_skills>` XML.
+- Files changed:
+  - `backend/skills_loader.py` (new — `build_skills_snapshot(skills_dir=None, *, write=True, snapshot_path=None) -> str`).
+  - `backend/tests/test_skills_loader.py` (new — 7 unittest cases).
+  - `backend/workspace/SKILLS_SNAPSHOT.md` (new — seeded with the empty-wrapper output by running the bootstrap once; US-003 deliberately deferred this file to US-009).
+- Design notes:
+  - PyYAML is NOT pinned in `backend/requirements.txt`. It is a stable transitive of `langchain-core`, `langchain-community`, `langchain-classic`, AND `llama-index-core` (4 direct requirers), so importing `yaml` at module top is safe across the pinned dep set. Decision rationale: US-002 explicitly enumerated the 13 deps; adding PyYAML deviates from that scope, and the four transitive requirers make accidental removal extremely unlikely.
+  - Frontmatter regex `r"\A---[ \t]*\n(.*?)\n---[ \t]*(?:\n|\Z)"` handles both trailing-newline AND EOF-terminated `---` blocks. `re.DOTALL` lets `.*?` cross newlines.
+  - When frontmatter is missing OR `yaml.safe_load` raises, the function falls back to using the SKILL folder name as `name` and an empty string as `description`. The agent will still see the skill in the snapshot — better to surface a partially-known skill than to silently drop it.
+  - `location` is hard-coded to `./backend/skills/<folder>/SKILL.md`, NOT to `skill_md.relative_to(PROJECT_ROOT)`. Reason: tests pass a temp `skills_dir` outside the project, but the production agent will always read SKILL.md via the `read_file` tool whose `root_dir=PROJECT_ROOT`. The XML must always reference the production layout regardless of where the bootstrap scanned.
+  - XML escaping via `xml.sax.saxutils.escape` only handles `<`, `>`, `&` by default — quotes pass through (PRD example doesn't quote attributes; we use elements only, so quote-safety isn't required). Test `test_xml_special_chars_in_frontmatter_are_escaped` pins this contract.
+  - Empty/missing skills dir returns the same empty wrapper (`<available_skills>\n</available_skills>\n`) — never crashes (consistent with US-008's `EMPTY_KB_MESSAGE` pattern).
+- Test wrinkle I hit:
+  - First draft of `test_write_persists_snapshot_file` ran `out.exists()` OUTSIDE the `with tempfile.TemporaryDirectory()` block, so the dir was already gone — false negative. Moved all assertions inside the `with` block. The tempdir auto-cleanup masked a real test bug for ~10s — worth remembering when writing tempdir-based tests.
+- Verification:
+  - `python3 -m py_compile backend/skills_loader.py backend/tests/test_skills_loader.py` → clean.
+  - `/tmp/mini-openclaw-test-venv/bin/python -W ignore -m unittest backend.tests.test_skills_loader -v` → 7/7 OK in 0.004s.
+  - Full backend suite (skills_loader + terminal + python_repl + fetch_url + read_file + search_knowledge_base) → 25/25 OK in 0.546s.
+  - `python -c "from backend.skills_loader import build_skills_snapshot; print(build_skills_snapshot())"` → prints and writes the empty wrapper; `backend/workspace/SKILLS_SNAPSHOT.md` now exists with the expected content.
+- **Learnings for future iterations:**
+  - PyYAML is freely available via `import yaml` across the codebase — no need to add a direct pin unless the LangChain dep tree changes drastically. Same trick applies to other "obviously needed" transitives like `requests`, `httpx`, `numpy`, etc.; check with `pip show <pkg>` in the test venv before deciding to pin.
+  - For functions that emit relative paths, ALWAYS write the path the production consumer expects, NOT `Path.relative_to(some_root)`. Tests that pass a fixture/temp dir should still see production-style paths in the output — that's a stronger correctness signal than "round-trip a path through the path API".
+  - When writing tempdir-based tests, ALL assertions about files must be inside the `with tempfile.TemporaryDirectory() as tmp:` block. The directory (and everything inside) is gone the moment the with block exits — `out.exists()` will return False even if the file was correctly written 1 line earlier.
+  - US-010 will add `backend/skills/get_weather/SKILL.md` with proper `name:` / `description:` frontmatter. After US-010 commits, re-running `python -m backend.skills_loader` (or whatever startup hook US-014 wires) will repopulate SKILLS_SNAPSHOT.md with the get_weather entry. The current committed SKILLS_SNAPSHOT.md (empty wrapper) is a placeholder that will be overwritten on first bootstrap with a real skill present.
+  - US-011 (prompt assembler) will read SKILLS_SNAPSHOT.md as the FIRST of 6 sections. The empty-wrapper output is well-formed XML and won't break concatenation; no special-case for "no skills" is needed in US-011.
 ---
