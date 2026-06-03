@@ -64,8 +64,8 @@
         "Typecheck passes"
       ],
       "priority": 4,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented backend/tools/terminal.py wrapping langchain_community.tools.ShellTool. BashProcess has no cwd param, so root_dir is enforced by prefixing each command with `cd <project-root> && (...)` before delegating to _SHELL_TOOL.process.run. Blacklist is a tuple of compiled regexes covering rm -rf /, rm -rf ~, fork bomb, mkfs, dd if=. Tests in backend/tests/test_terminal.py — 4 unittest cases (blacklist detection truth-table + allowed-command output + refusal string). All pass; py_compile clean."
     },
     {
       "id": "US-005",

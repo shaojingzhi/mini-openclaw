@@ -13,6 +13,10 @@ Started: 2026年 6月 4日 星期四 00时57分56秒 CST
 - System Prompt source files (6 total) live in two dirs: 5 in `backend/workspace/` (SOUL/IDENTITY/USER/AGENTS/SKILLS_SNAPSHOT) and 1 in `backend/memory/` (MEMORY.md). US-011's assembler concatenates them in this fixed order: SKILLS_SNAPSHOT → SOUL → IDENTITY → USER → AGENTS → MEMORY.
 - `AGENTS.md` contains TWO protocols: the SKILL PROTOCOL block must be verbatim from PRD §4.3; the MEMORY PROTOCOL block was authored locally (PRD shows it as `...`). Future stories that touch memory writes (e.g. anything appending to MEMORY.md) should respect the rules written there — read/write triggers, transparent disclosure, etc.
 - When a story seeds real files into a `.gitkeep`-ed empty dir, remove the `.gitkeep` in the same commit so we don't carry placeholders forever.
+- Agent tools (PRD §2.3) live in `backend/tools/<name>.py` and expose a `@tool("<name>")`-decorated function (LangChain 1.x pattern from `langchain_core.tools`). Each tool module re-exports its tool via `backend/tools/__init__.py` `__all__`. Invoke in tests with `tool.invoke({"<arg>": value})`.
+- `langchain_experimental.llm_bash.bash.BashProcess` has no `cwd` parameter — to pin a shell tool to a sandbox root, prefix every command with `cd <shlex.quoted-root> && (...)` before delegating to `ShellTool().process.run(...)`. Don't reach for `subprocess` directly; the PRD §2.3 wording is "wrap" the LangChain tool.
+- Tests live in `backend/tests/test_<module>.py` using stdlib `unittest` (no pytest in requirements yet). Run them in the venv with `/tmp/mini-openclaw-test-venv/bin/python -W ignore -m unittest backend.tests.test_<module> -v` — the `-W ignore` silences the noisy `langchain-community`/`langchain-experimental` "being sunset" deprecation warnings emitted at import.
+- `langchain-community` and `langchain-experimental` are both formally sunset; their deprecation warnings are expected, not actionable. The PRD intentionally pins them because that's where `ShellTool`/`RequestsGetTool`/`ReadFileTool`/`PythonREPLTool` still live in the 0.4.x line we pinned in US-002.
 ---
 
 ## 2026-06-04 - US-001
@@ -76,4 +80,27 @@ Started: 2026年 6月 4日 星期四 00时57分56秒 CST
   - Default file language is Chinese to match the PRD's voice; the agent persona in SOUL.md says "default to Chinese unless user uses English." If future stories add English-only fixtures, they should not overwrite SOUL/IDENTITY/USER/AGENTS/MEMORY — those are user-editable runtime content, not test fixtures.
   - `backend/workspace/` previously held only `.gitkeep`. After seeding, removed `.gitkeep` to avoid clutter. `backend/memory/logs/.gitkeep` and other empty-dir markers are still in place where appropriate.
   - The PRD's "build the prompt" story (US-011) will need to read these exact 5 files plus SKILLS_SNAPSHOT.md. The order is SKILLS_SNAPSHOT → SOUL → IDENTITY → USER → AGENTS → MEMORY (PRD §4.2). Don't reorder.
+---
+
+## 2026-06-04 - US-004
+- Implemented the sandboxed `terminal` agent tool.
+- Files changed:
+  - `backend/tools/terminal.py` (new — `@tool("terminal")` wrapping `langchain_community.tools.ShellTool`; pre-filters destructive commands and prefixes every accepted command with `cd <project-root> && (...)` before delegating to `_SHELL_TOOL.process.run`).
+  - `backend/tools/__init__.py` (was empty; now re-exports `terminal` so consumers can do `from backend.tools import terminal`).
+  - `backend/tests/__init__.py` (new, empty — package marker for the test tree).
+  - `backend/tests/test_terminal.py` (new — 4 unittest cases: blacklist truth-table for the 5 PRD-named patterns, allowed-command output assertion via `echo hello-mini-openclaw`, refusal-string assertion for `rm -rf /`).
+- Design notes:
+  - Blacklist is a tuple of compiled regexes living at module scope. Patterns: `\brm\s+-rf\s+/`, `\brm\s+-rf\s+~`, fork-bomb literal `:(){:|:&};:` (with tolerant whitespace), `\bmkfs\b`, `\bdd\s+if=`. The first two match any `rm -rf /<anything>` / `rm -rf ~<anything>` — the PRD's "including" wording invites a slightly broader interpretation than the exact strings.
+  - Refusal string is exported as `BLOCKED_MESSAGE` so tests can assert exact equality without string-duplication drift.
+  - Root dir is computed once at import as `Path(__file__).resolve().parents[2]` (project root, not `backend/`). The PRD criterion is "root_dir set to the project root"; the terminal needs to see scripts/, frontend/, etc., not just backend/.
+  - `_SHELL_TOOL` is a module-level singleton — instantiating ShellTool per call is wasteful and triggers Pydantic warnings every time.
+- Verification:
+  - `python3 -m py_compile` clean on all 4 new/modified files (host Python).
+  - `/tmp/mini-openclaw-test-venv/bin/python -W ignore -m unittest backend.tests.test_terminal -v` → 4/4 OK in 0.010s.
+- **Learnings for future iterations:**
+  - `BashProcess` has no `cwd` — confirmed by reading `langchain_experimental/llm_bash/bash.py`. Future tool wrappers that need sandboxing (US-007 `read_file` will need similar root-restriction via `root_dir` on `ReadFileTool`, which DOES support it; US-008's index path under `backend/storage/`) cannot rely on a shared "set cwd once" mechanism — each tool sandboxes itself.
+  - The `langchain_community` ShellTool field set is: `name, description, args_schema, return_direct, verbose, callbacks, tags, metadata, handle_tool_error, handle_validation_error, response_format, extras, process, ask_human_input`. `ask_human_input` defaults to False — agent invocations won't block on stdin, good.
+  - Modern `@tool("<name>")` decorator from `langchain_core.tools` produces a `StructuredTool` whose `args_schema` is auto-built from the function's type hints. Invoking with `tool.invoke({"arg": value})` always works; `tool.invoke(value)` works for single-arg tools too.
+  - `langchain_community` and `langchain_experimental` both print deprecation warnings on import — expected, see codebase pattern above. Don't try to "fix" them by migrating away; that's not in scope until the PRD is rewritten.
+  - The `_run_in_root` helper uses `shlex.quote(str(PROJECT_ROOT))` so paths with spaces won't break the `cd` prefix. Apply the same pattern in future tools that compose shell strings.
 ---
