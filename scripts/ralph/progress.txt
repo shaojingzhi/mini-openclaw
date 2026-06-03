@@ -17,6 +17,7 @@ Started: 2026年 6月 4日 星期四 00时57分56秒 CST
 - `langchain_experimental.llm_bash.bash.BashProcess` has no `cwd` parameter — to pin a shell tool to a sandbox root, prefix every command with `cd <shlex.quoted-root> && (...)` before delegating to `ShellTool().process.run(...)`. Don't reach for `subprocess` directly; the PRD §2.3 wording is "wrap" the LangChain tool.
 - Tests live in `backend/tests/test_<module>.py` using stdlib `unittest` (no pytest in requirements yet). Run them in the venv with `/tmp/mini-openclaw-test-venv/bin/python -W ignore -m unittest backend.tests.test_<module> -v` — the `-W ignore` silences the noisy `langchain-community`/`langchain-experimental` "being sunset" deprecation warnings emitted at import.
 - `langchain-community` and `langchain-experimental` are both formally sunset; their deprecation warnings are expected, not actionable. The PRD intentionally pins them because that's where `ShellTool`/`RequestsGetTool`/`ReadFileTool`/`PythonREPLTool` still live in the 0.4.x line we pinned in US-002.
+- Tool-wrapping pattern (US-004/005, applies to US-006/007): instantiate the underlying LangChain tool ONCE at module scope as a private singleton (e.g. `_SHELL_TOOL`, `_REPL_TOOL`), then expose a thin `@tool("<name>")`-decorated function whose typed signature drives the new `args_schema`. Call the singleton via `.invoke(...)` or its `.process.run(...)` for sandbox-prefixed bash. Tools normally return stdout WITH a trailing newline; `.rstrip()` is a safe normalisation (use `.splitlines()` later if line counts matter).
 ---
 
 ## 2026-06-04 - US-001
@@ -80,6 +81,27 @@ Started: 2026年 6月 4日 星期四 00时57分56秒 CST
   - Default file language is Chinese to match the PRD's voice; the agent persona in SOUL.md says "default to Chinese unless user uses English." If future stories add English-only fixtures, they should not overwrite SOUL/IDENTITY/USER/AGENTS/MEMORY — those are user-editable runtime content, not test fixtures.
   - `backend/workspace/` previously held only `.gitkeep`. After seeding, removed `.gitkeep` to avoid clutter. `backend/memory/logs/.gitkeep` and other empty-dir markers are still in place where appropriate.
   - The PRD's "build the prompt" story (US-011) will need to read these exact 5 files plus SKILLS_SNAPSHOT.md. The order is SKILLS_SNAPSHOT → SOUL → IDENTITY → USER → AGENTS → MEMORY (PRD §4.2). Don't reorder.
+---
+
+## 2026-06-04 - US-005
+- Implemented the `python_repl` agent tool.
+- Files changed:
+  - `backend/tools/python_repl.py` (new — `@tool("python_repl")` wrapping `langchain_experimental.tools.PythonREPLTool`; rstrips trailing newline so `print(2+2)` returns `"4"` not `"4\n"`).
+  - `backend/tools/__init__.py` (re-export `python_repl` alongside `terminal`; `__all__` sorted alphabetically).
+  - `backend/tests/test_python_repl.py` (new — 3 unittest cases: print-2+2 == "4", arithmetic chain `(3*7)-1 == 20`, `import math` exercising `sqrt(16)` and `floor(3.7)`).
+- Design notes:
+  - `PythonREPLTool` has no `args_schema` (`None`) but its `args` dict shows the single string field is named `query` — so call sites use `tool.invoke({"query": "..."})`. The `@tool` decorator on our wrapper rebuilds an `args_schema` from the wrapper's `query: str` signature, keeping that contract.
+  - The underlying tool ALWAYS prints `"Python REPL can execute arbitrary code. Use with caution."` to stderr on first import-time use. That is a one-shot stderr line, not part of `stdout`, so `rstrip()` of the captured value is sufficient.
+  - `_REPL_TOOL` is a module-level singleton, same pattern as `_SHELL_TOOL` in `terminal.py`.
+- Verification:
+  - `python3 -m py_compile backend/tools/python_repl.py backend/tools/__init__.py backend/tests/test_python_repl.py` → clean (host Python 3.14).
+  - `/tmp/mini-openclaw-test-venv/bin/python -W ignore -m unittest backend.tests.test_python_repl -v` → 3/3 OK in 0.013s.
+  - Full suite (`test_terminal` + `test_python_repl`) → 7/7 OK.
+- **Learnings for future iterations:**
+  - `PythonREPLTool.invoke(snippet)` returns the captured stdout as a single string with a trailing `\n`. If a future story needs to *count* lines or *parse* output, prefer `.splitlines()` rather than `.split("\n")` to avoid an empty trailing element.
+  - `print(...)` is mandatory inside the REPL snippet to surface a value — the snippet's *return value* is discarded. The docstring of our wrapper says so; the agent SOUL.md / IDENTITY.md don't need to repeat it.
+  - Modern `@tool("name")` wrappers around an existing langchain tool work cleanly: instantiate the underlying tool once at module scope, expose a thin Python function with typed args, and let the decorator build the `args_schema`. This is now the established pattern for US-005, US-006 (`fetch_url`), and US-007 (`read_file`).
+  - When stripping output, prefer `.rstrip()` (whitespace-aware, idempotent) over `.rstrip("\n")` — covers `\r\n` on Windows-style outputs too. No actual blocker in this story; just consistent across tools.
 ---
 
 ## 2026-06-04 - US-004

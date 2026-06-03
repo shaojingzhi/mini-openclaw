@@ -80,8 +80,8 @@
         "Typecheck passes"
       ],
       "priority": 5,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented backend/tools/python_repl.py wrapping langchain_experimental.tools.PythonREPLTool as a `@tool(\"python_repl\")` StructuredTool. The underlying tool's `invoke` returns trailing-newline output (`'4\\n'` for `print(2+2)`); we `.rstrip()` it so the literal acceptance criterion `returns '4'` holds. Re-exported from backend/tools/__init__.py. Tests in backend/tests/test_python_repl.py — 3 unittest cases: print-2+2, arithmetic chain, `import math` (sqrt + floor). All 7 backend tests still pass."
     },
     {
       "id": "US-006",
