@@ -1,0 +1,30 @@
+# Ralph Progress Log
+Started: 2026年 6月 4日 星期四 00时57分56秒 CST
+---
+
+## Codebase Patterns
+- Python backend uses Python 3.10+ syntax with `from __future__ import annotations` and PEP 604/585 typing (e.g. `dict[str, str]`).
+- FastAPI app object lives in `backend/app.py` and is imported as `backend.app:app` (note: project root must be on `PYTHONPATH`, i.e. run uvicorn from repo root).
+- Backend directory layout (per PRD §4): `backend/{memory,memory/logs,sessions,skills,workspace,tools,graph}` — empty dirs get `.gitkeep` so git tracks them.
+- Endpoints use plain `def` returning typed dicts rather than `async def` unless I/O blocks (keep it simple until needed).
+---
+
+## 2026-06-04 - US-001
+- Implemented FastAPI scaffold and directory tree.
+- Files changed:
+  - `backend/__init__.py` (new, empty package marker)
+  - `backend/app.py` (new — `FastAPI` instance + `GET /health` returning `{"status": "ok"}`, plus `uvicorn.run` entrypoint on port 8002)
+  - `backend/tools/__init__.py`, `backend/graph/__init__.py` (package markers)
+  - `backend/memory/logs/.gitkeep`, `backend/sessions/.gitkeep`, `backend/skills/.gitkeep`, `backend/workspace/.gitkeep` (preserve empty dirs in git)
+- Verification:
+  - `python3 -m py_compile` succeeds on all new files.
+  - Importing `backend.app` exposes `/health` route.
+  - `TestClient(app).get('/health')` returns 200 with `{"status": "ok"}`.
+  - Live run `python3 -m uvicorn backend.app:app --port 8002` answers `curl http://127.0.0.1:8002/health` with `{"status": "ok"}`.
+- **Learnings for future iterations:**
+  - The project has no `requirements.txt` yet (that is US-002) but `fastapi` is already installed in the host Python (0.135.1). Don't assume virtualenv — run with system `python3`.
+  - There is no `mypy`/`pyright` installed; "typecheck passes" is currently enforced via `py_compile` + manual review. Future stories may want to add `mypy` to requirements when convenient.
+  - The system shell on this machine is `zsh` on macOS; `mkdir -p` works to create the full backend tree in one call.
+  - `from __future__ import annotations` keeps PEP 604 union syntax working on older runtimes; use it in every module.
+  - Empty directories (`memory/logs`, `sessions`, `skills`, `workspace`) need `.gitkeep` because git won't track empty dirs — future stories that seed real files into these dirs can delete the `.gitkeep`.
+---
