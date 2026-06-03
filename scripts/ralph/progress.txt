@@ -21,6 +21,7 @@ Started: 2026年 6月 4日 星期四 00时57分56秒 CST
 - Patching LangChain tools in tests: `RequestsGetTool`, `TextRequestsWrapper`, `ShellTool`, and most other `langchain_community`/`langchain_core` tools are Pydantic-v2 models with `model_config` that forbids attribute mutation. `unittest.mock.patch("...x.y")` where `y` is an attribute on a Pydantic instance will fail at teardown with `'<Model>' object has no attribute 'y'` from the model's `__delattr__`. Workaround: patch the module-level singleton itself with a `MagicMock` (e.g. `patch("backend.tools.fetch_url._REQUESTS_TOOL", stub)`) and configure `stub.invoke.return_value = ...`. Applies to US-007 read_file tests and the US-012 mocked-LLM agent test.
 - `RequestsGetTool` construction requires `allow_dangerous_requests=True` — the `BaseRequestsTool.__init__` explicitly raises `ValueError` otherwise. The flag is named after the upstream LangChain security guidance, not because anything we do is more dangerous than a normal HTTP GET.
 - `html2text.HTML2Text()` line-wraps to 78 cols by default, which scrambles paragraphs. Always set `converter.body_width = 0` before `.handle()` so paragraphs stay on a single line — this matters for LLM consumption.
+- `langchain_community.tools.file_management.ReadFileTool` has built-in sandboxing via the `root_dir` field on `BaseFileToolMixin` — pass `root_dir=str(PROJECT_ROOT)` at construction and you get free `Access denied to file_path: ...` rejection for any path that resolves outside root. NO custom blacklist is needed (unlike `terminal`, where `BashProcess` has no cwd binding). The denial path covers both absolute paths (because `Path("/x") / "/etc/passwd"` returns `Path("/etc/passwd")`, which then isn't relative to root) and `..` traversal. Missing files inside root return a DIFFERENT error string (`Error: no such file or directory: ...`) — tests can rely on this distinction.
 ---
 
 ## 2026-06-04 - US-001
@@ -157,4 +158,30 @@ Started: 2026年 6月 4日 星期四 00时57分56秒 CST
   - `bs4` is installed via the `beautifulsoup4==4.14.3` pin from US-002 with `soupsieve` as a transitive — confirmed importable in the test venv. The `html.parser` backend is stdlib, so we don't need `lxml`.
   - `html2text` defaults wrap lines at 78 columns, which makes paragraph text unreadable. Always set `body_width = 0`.
   - Future tools that produce text for the LLM should follow the same shape: `_clean_<x>` private helper, public `@tool` function does only the dispatch + cleaning, both `.rstrip()` the result.
+---
+
+## 2026-06-04 - US-007
+- Implemented the project-root-restricted `read_file` agent tool.
+- Files changed:
+  - `backend/tools/read_file.py` (new — `@tool("read_file")` wrapping `langchain_community.tools.file_management.ReadFileTool` with `root_dir=str(PROJECT_ROOT)`).
+  - `backend/tools/__init__.py` (re-export `read_file`; `__all__` re-sorted: fetch_url, python_repl, read_file, terminal).
+  - `backend/tests/test_read_file.py` (new — 4 unittest cases).
+- Design notes:
+  - Unlike `terminal` (US-004) where `BashProcess` had no `cwd` and we had to prefix every command with a `cd` and a destructive-command blacklist, `ReadFileTool` inherits from `BaseFileToolMixin` which already supports `root_dir`. Pass it at construction and the tool's `get_relative_path` raises `FileValidationError` for anything that resolves outside root, returning the fixed `INVALID_PATH_TEMPLATE` ("Access denied to file_path: ...").
+  - `PROJECT_ROOT = Path(__file__).resolve().parents[2]` — same computation as `terminal.py`, so both tools agree on the sandbox root. If a future story needs to share this constant, expose it from `backend/tools/__init__.py`.
+  - The `_READ_FILE_TOOL` singleton is a Pydantic-v2 model (same family as `RequestsGetTool`), so the no-instance-patch tip from US-006 applies if a future test needs to swap it out — but for THIS story we didn't need to mock anything, because the real filesystem provides perfectly stable inputs (`backend/app.py` always exists; `/etc/passwd` always lives outside root).
+- Test coverage:
+  - in-root success: reads `backend/app.py`, asserts equality with `.read_text()`.
+  - absolute-path denial: `/etc/passwd` → "Access denied" string; assert NOT containing "root:" (proof the file wasn't actually read).
+  - relative-traversal denial: `../../etc/passwd` → "Access denied".
+  - missing-file-inside-root: distinct `no such file or directory` error (proves the denial path and the not-found path are distinguishable).
+- Verification:
+  - `python3 -m py_compile backend/tools/read_file.py backend/tools/__init__.py backend/tests/test_read_file.py` → clean.
+  - `/tmp/mini-openclaw-test-venv/bin/python -W ignore -m unittest backend.tests.test_read_file -v` → 4/4 OK in 0.007s.
+  - Full suite (`test_fetch_url` + `test_python_repl` + `test_read_file` + `test_terminal`) → 14/14 OK.
+- **Learnings for future iterations:**
+  - `ReadFileTool` + `WriteFileTool` (langchain_community.tools.file_management) BOTH inherit from `BaseFileToolMixin`. When US-015 implements `POST /api/files`, it can either reuse this same `_READ_FILE_TOOL` instance for reads or write a sibling `WriteFileTool` with the same `root_dir` — but watch out: US-015's allowed-roots are SUBSETS of PROJECT_ROOT (only `backend/memory`, `backend/workspace`, `backend/skills`), so the API endpoint will need a second tighter validation layer above the tool's project-root check.
+  - When the tool needs to expose both a "project-root sandbox" and a "narrower allowed-roots policy" (US-015), do the narrower check FIRST in the API layer (return HTTP 403) and let the tool's own check be the safety net. Don't try to reconfigure `root_dir` per-request — Pydantic v2 models forbid the assignment.
+  - On macOS, `Path("foo") / "/etc/passwd"` returns `Path("/etc/passwd")` — the right operand being absolute discards the left. That is exactly why the denial path is reached for absolute file_paths without needing a custom blacklist. Don't write a redundant `if file_path.startswith("/")` guard.
+  - `INVALID_PATH_TEMPLATE` includes the literal substring `"Access denied"` — tests can assert on that substring without depending on the rest of the template wording. The miss-inside-root case uses a different substring (`"no such file"`), so test_reports_missing_file_inside_root pins both directions.
 ---
