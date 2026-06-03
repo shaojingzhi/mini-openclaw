@@ -22,6 +22,13 @@ Started: 2026年 6月 4日 星期四 00时57分56秒 CST
 - `RequestsGetTool` construction requires `allow_dangerous_requests=True` — the `BaseRequestsTool.__init__` explicitly raises `ValueError` otherwise. The flag is named after the upstream LangChain security guidance, not because anything we do is more dangerous than a normal HTTP GET.
 - `html2text.HTML2Text()` line-wraps to 78 cols by default, which scrambles paragraphs. Always set `converter.body_width = 0` before `.handle()` so paragraphs stay on a single line — this matters for LLM consumption.
 - `langchain_community.tools.file_management.ReadFileTool` has built-in sandboxing via the `root_dir` field on `BaseFileToolMixin` — pass `root_dir=str(PROJECT_ROOT)` at construction and you get free `Access denied to file_path: ...` rejection for any path that resolves outside root. NO custom blacklist is needed (unlike `terminal`, where `BashProcess` has no cwd binding). The denial path covers both absolute paths (because `Path("/x") / "/etc/passwd"` returns `Path("/etc/passwd")`, which then isn't relative to root) and `..` traversal. Missing files inside root return a DIFFERENT error string (`Error: no such file or directory: ...`) — tests can rely on this distinction.
+- LlamaIndex tools live behind LAZY imports: heavy modules from `llama_index.core` / `llama_index.retrievers.bm25` should be imported INSIDE the function that builds the index, not at module top, so `@tool` decoration and the FastAPI startup stay fast. The retriever itself is cached at module scope in a `dict` keyed by `(knowledge_dir, storage_dir)`; tests call a public `clear_cache()` between cases to force a rebuild against monkey-patched paths.
+- Tests that need to monkey-patch a module attribute (`patch.object(sk_mod, "KNOWLEDGE_DIR", ...)`) MUST import the module via `importlib.import_module("backend.tools.search_knowledge_base")` — `from backend.tools import search_knowledge_base as sk_mod` will silently bind to the re-exported `@tool` function (the `__init__.py` `from … import name` rebinds the submodule attribute on the package). The same caveat applies to `read_file`, `fetch_url`, etc.
+- Functions that read patched module-level state MUST refer to the names directly (e.g. `KNOWLEDGE_DIR`, not a default arg `dir = KNOWLEDGE_DIR`). Default arg values are bound at function-definition time and freeze the original `Path`; bare references go through the module globals each call and respect `patch.object`.
+- LlamaIndex `QueryFusionRetriever` only calls the configured LLM when `num_queries > 1`. With `num_queries=1` it just merges results from the input retrievers via `mode` math (`reciprocal_rerank` / `simple` / `relative_score` / `dist_based_score`) — no API key needed for fusion itself. We still set `Settings.llm = MockLLM()` defensively and use `MockEmbedding(embed_dim=384)` when `OPENAI_API_KEY` is missing so `VectorStoreIndex.from_documents()` does not try to call OpenAI for embedding either.
+- LlamaIndex persistence sentinel: presence of `<storage_dir>/docstore.json` means a valid index exists and can be reloaded with `StorageContext.from_defaults(persist_dir=...)` + `load_index_from_storage(ctx)`. Wrap the reload in `try/except` and fall back to a rebuild — corrupt persist dirs should never crash a tool.
+- `BM25Retriever.from_defaults(nodes=...)` is the right entry point for ad-hoc indexes; it takes a list of `BaseNode` (use `list(index.docstore.docs.values())` after building a `VectorStoreIndex`). If `similarity_top_k` exceeds the corpus size, bm25s prints a warning and silently clamps to `len(nodes)` — that warning is benign.
+- `backend/storage/` is ALREADY in `.gitignore` (since US-001 wave). `backend/knowledge/` is empty by design with a `.gitkeep`; the search tool gracefully reports `EMPTY_KB_MESSAGE` if the folder has no readable files or doesn't exist.
 ---
 
 ## 2026-06-04 - US-001
@@ -184,4 +191,33 @@ Started: 2026年 6月 4日 星期四 00时57分56秒 CST
   - When the tool needs to expose both a "project-root sandbox" and a "narrower allowed-roots policy" (US-015), do the narrower check FIRST in the API layer (return HTTP 403) and let the tool's own check be the safety net. Don't try to reconfigure `root_dir` per-request — Pydantic v2 models forbid the assignment.
   - On macOS, `Path("foo") / "/etc/passwd"` returns `Path("/etc/passwd")` — the right operand being absolute discards the left. That is exactly why the denial path is reached for absolute file_paths without needing a custom blacklist. Don't write a redundant `if file_path.startswith("/")` guard.
   - `INVALID_PATH_TEMPLATE` includes the literal substring `"Access denied"` — tests can assert on that substring without depending on the rest of the template wording. The miss-inside-root case uses a different substring (`"no such file"`), so test_reports_missing_file_inside_root pins both directions.
+---
+
+## 2026-06-04 - US-008
+- Implemented the hybrid (BM25 + vector) `search_knowledge_base` agent tool.
+- Files changed:
+  - `backend/tools/search_knowledge_base.py` (new — `@tool("search_knowledge_base")` building a `QueryFusionRetriever` over `BM25Retriever` + `VectorIndexRetriever`; index persisted under `backend/storage/`; lazy imports + module-level retriever cache with `clear_cache()` for tests).
+  - `backend/tools/__init__.py` (re-export `search_knowledge_base`; `__all__` resorted alphabetically: fetch_url, python_repl, read_file, search_knowledge_base, terminal).
+  - `backend/tests/test_search_knowledge_base.py` (new — 4 unittest cases: empty dir, missing dir, seeded MD keyword retrieval, persist-to-storage check).
+  - `backend/knowledge/.gitkeep` (new — seed the empty knowledge folder so layout matches PRD; `backend/storage/` was already in `.gitignore`).
+- Design notes:
+  - `_configure_settings()` pins `Settings.llm = MockLLM()` and, when `OPENAI_API_KEY` is absent, also `Settings.embed_model = MockEmbedding(embed_dim=384)`. Real OpenAI embeddings are picked up automatically when the env var is present.
+  - `QueryFusionRetriever(num_queries=1, mode="reciprocal_rerank")` skips LLM-based query rewriting entirely — fusion is pure math over the BM25 and vector top-k node sets.
+  - Persistence sentinel is `<storage_dir>/docstore.json`. Reload via `StorageContext.from_defaults(persist_dir=...)` + `load_index_from_storage(ctx)`. Reload errors fall through to a rebuild.
+  - `_get_retriever()` does NOT take default-valued args; it reads `KNOWLEDGE_DIR` / `STORAGE_DIR` from module globals each call, so `patch.object(sk_mod, "KNOWLEDGE_DIR", ...)` actually takes effect.
+- Test wrinkles I hit:
+  - First test run crashed with `AttributeError: ... does not have the attribute 'KNOWLEDGE_DIR'` from `patch.object`. Cause: `from backend.tools import search_knowledge_base as sk_mod` resolves to the re-exported `@tool` function, NOT the module — because `backend/tools/__init__.py` did `from backend.tools.search_knowledge_base import search_knowledge_base`, which rebinds the submodule attribute on the package. Fix: `sk_mod = importlib.import_module("backend.tools.search_knowledge_base")` returns the module from `sys.modules` directly. Added Codebase Pattern about this.
+  - First draft of `_get_retriever` used `def _get_retriever(knowledge_dir: Path = KNOWLEDGE_DIR, ...)` — that captures the original Path at definition time and ignores `patch.object`. Rewrote to read the module-level names directly each call.
+- Verification:
+  - `python3 -m py_compile` clean on all 3 new/modified files (host Python 3.14).
+  - `/tmp/mini-openclaw-test-venv/bin/python -W ignore -m unittest backend.tests.test_search_knowledge_base -v` → 4/4 OK in 0.525s.
+  - Full backend suite (`test_fetch_url` + `test_python_repl` + `test_read_file` + `test_search_knowledge_base` + `test_terminal`) → 18/18 OK in 0.410s.
+- **Learnings for future iterations:**
+  - When a future story (US-009 skills_loader, US-011 prompt_assembler, etc.) needs to monkey-patch a module attribute in tests, USE `importlib.import_module(...)` to grab the module, not `from package import submodule as alias`. The `__init__.py` re-exports shadow the submodule name.
+  - Functions that should respect monkey-patched module state must reference the names directly in the body — no `def f(x=MODULE_LEVEL_PATH)` defaults.
+  - `Settings` in `llama_index.core` is a global singleton; configuring it once in `_configure_settings()` is fine for our single-process tool setup, but be aware that any other LlamaIndex consumer in the same process inherits these settings (currently no others).
+  - `SimpleDirectoryReader` reads MD/TXT out of the box. PDF needs `pypdf` installed — NOT in our pinned `requirements.txt`. If a future story tests PDF ingestion or production users drop PDFs into `backend/knowledge/`, add `pypdf` to requirements.txt. For now, the tool will throw at first PDF read — note this in any docs/README pass.
+  - The persisted storage dir (`backend/storage/`) is gitignored. Don't commit anything into it. The `_build_or_load_index` reload path uses `docstore.json` presence as the sentinel.
+  - `bm25s.BM25 requires k less than or equal to number of nodes added. Overriding ...` is a benign info-log from bm25s when corpus < top_k — not a test failure signal, just noisy. Tests should NOT assert on stderr.
+  - `QueryFusionRetriever` fusion modes: `"simple"` (concat+dedupe), `"reciprocal_rerank"` (RRF, our default), `"relative_score"`, `"dist_based_score"`. RRF works well when BM25 and vector scores have wildly different scales (which they do here, especially with MockEmbedding).
 ---

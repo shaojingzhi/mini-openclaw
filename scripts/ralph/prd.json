@@ -132,8 +132,8 @@
         "Typecheck passes"
       ],
       "priority": 8,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented backend/tools/search_knowledge_base.py as a `@tool(\"search_knowledge_base\")` that builds a QueryFusionRetriever combining BM25Retriever (llama-index-retrievers-bm25 0.7.x) and VectorIndexRetriever over `backend/knowledge/`. The VectorStoreIndex is persisted under `backend/storage/` and reloaded from `docstore.json` on subsequent calls. `_configure_settings()` sets `Settings.llm = MockLLM()` and falls back to `MockEmbedding(embed_dim=384)` when `OPENAI_API_KEY` is unset so the tool never crashes from missing credentials — BM25 still does real keyword retrieval. QueryFusionRetriever uses `num_queries=1` to bypass LLM-based query rewriting and `mode='reciprocal_rerank'`. Empty/missing knowledge folder returns the fixed `EMPTY_KB_MESSAGE` string. Re-exported from `backend/tools/__init__.py` (`__all__` resorted: fetch_url, python_repl, read_file, search_knowledge_base, terminal). Added `backend/knowledge/.gitkeep` so the layout matches the PRD; `backend/storage/` was already gitignored. 4 unittest cases in backend/tests/test_search_knowledge_base.py: empty-dir, missing-dir, keyword retrieval of a seeded markdown file, and persisted-storage check. All 18 backend tests pass."
     },
     {
       "id": "US-009",
