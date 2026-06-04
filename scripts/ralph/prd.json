@@ -217,8 +217,8 @@
         "Typecheck passes"
       ],
       "priority": 13,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented backend/sessions_store.py exposing `load_session(name) -> list[dict[str, Any]]` and `append_message(name, message) -> list[dict[str, Any]]`. Sessions stored at backend/sessions/{name}.json as JSON arrays. Loading non-existent sessions returns [] (no exception). append_message lazily creates SESSIONS_DIR + the JSON file on first call and writes atomically via .tmp + Path.replace so a crash mid-write can't corrupt an existing session. SESSIONS_DIR is a module-level constant (not a default arg) so tests can patch.object it (per Codebase Patterns US-008/US-011). Session names restricted to `[A-Za-z0-9._-]+` (rejects `..`, `/`, empty, etc.) — prevents path traversal out of SESSIONS_DIR; ALLOWED_ROLES = ('user', 'assistant', 'tool'). Tests in backend/tests/test_sessions_store.py — 11 unittest cases across LoadSessionTests (missing/existing/corrupt-JSON/empty-file), AppendMessageTests (first-call file creation, multi-role extend, Unicode + ordering roundtrip with ensure_ascii=False, role rejection, non-dict rejection), SessionNameValidationTests (traversal rejection + typical-name acceptance). All 44 backend tests pass."
     },
     {
       "id": "US-014",
