@@ -3,6 +3,8 @@ Started: 2026年 6月 4日 星期四 00时57分56秒 CST
 ---
 
 ## Codebase Patterns
+- `langchain` / `sse-starlette` mixed response endpoints in FastAPI must disable response-model generation: use `@app.post(..., response_model=None)` when the handler may return `EventSourceResponse` for SSE or a normal dict for non-stream mode. A union return annotation alone will make route registration fail.
+- LangChain agent streaming for UI/SSE should normalize two shapes: custom app-level events if the agent emits `{type/event_type: thought|tool_call|tool_result|final, data: ...}`, and raw `astream_events(version="v2")` events like `on_tool_start`, `on_tool_end`, `on_chat_model_stream` when working against plain `create_agent` output. Collect streamed chat-model chunks and synthesize one trailing `final` event if no explicit final arrives.
 - Python backend uses Python 3.10+ syntax with `from __future__ import annotations` and PEP 604/585 typing (e.g. `dict[str, str]`).
 - FastAPI app object lives in `backend/app.py` and is imported as `backend.app:app` (note: project root must be on `PYTHONPATH`, i.e. run uvicorn from repo root).
 - Backend directory layout (per PRD §4): `backend/{memory,memory/logs,sessions,skills,workspace,tools,graph}` — empty dirs get `.gitkeep` so git tracks them.
@@ -361,4 +363,19 @@ Started: 2026年 6月 4日 星期四 00时57分56秒 CST
   - Session-name validation regex `^[A-Za-z0-9._-]+$` lets the UI generate session IDs like `2026-06-05_main` or `session.1` without re-encoding. If a future story wants UUIDs, those already match (`hex` + dashes). Do NOT introduce slugification client-side — that would mask traversal attempts.
   - Don't read the JSON twice in append_message; we already call `load_session` (which handles missing/corrupt cases) and then write the full extended list back. That keeps the atomic-write logic in one place at the cost of one extra parse per append — acceptable given that sessions stay small (< 100 messages each in practice).
   - If a future story needs to DELETE messages or rewrite history, expose a `replace_session(name, messages)` helper rather than letting callers reach into `_session_path`. Keep the module's surface minimal: load + append are the only verbs the agent loop needs.
+---
+
+## 2026-06-05 01:46:19 CST - US-014
+- Implemented `POST /api/chat` in `backend/app.py` with request parsing, SSE streaming, and non-stream JSON replies.
+- Files changed:
+  - `backend/app.py` (`ChatRequest`, SSE event adapter, `/api/chat` route, final-reply extraction helpers)
+  - `backend/tests/test_api_chat.py` (new — FastAPI `TestClient` integration coverage for stream and non-stream modes with mocked agents)
+- Verification:
+  - `python3 -m py_compile backend/app.py backend/tests/test_api_chat.py` → clean.
+  - `/tmp/mini-openclaw-test-venv/bin/python -W ignore -m unittest backend.tests.test_api_chat -v` → 2/2 OK.
+  - `/tmp/mini-openclaw-test-venv/bin/python -W ignore -m unittest discover -s backend/tests -v` → 46/46 OK.
+- **Learnings for future iterations:**
+  - `create_agent(...).astream_events(version="v2")` does not natively emit the PRD's `thought` / `tool_call` / `tool_result` / `final` names. The API layer should normalize raw LangChain events (`on_tool_start`, `on_tool_end`, `on_chat_model_stream`) into the frontend contract instead of coupling the UI to LangChain internals.
+  - For SSE tests with `TestClient`, assert on `response.text` event blocks and keep any tempdir-backed file reads inside the `TemporaryDirectory()` context. The session JSON file is removed as soon as the context exits.
+  - Mixed SSE/dict endpoints need `response_model=None` on the FastAPI route decorator; otherwise startup fails while FastAPI tries to build a Pydantic model from `EventSourceResponse | dict[...]`.
 ---

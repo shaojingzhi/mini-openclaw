@@ -236,8 +236,8 @@
         "Typecheck passes"
       ],
       "priority": 14,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Added POST /api/chat in backend/app.py with ChatRequest parsing, SSE streaming via EventSourceResponse when stream=true, and JSON {reply} fallback when stream=false. The endpoint persists the incoming user message and final assistant message through sessions_store, and normalizes LangChain streaming into thought/tool_call/tool_result/final SSE events while also tolerating raw create_agent astream_events(v2) event names. Added backend/tests/test_api_chat.py with FastAPI TestClient coverage for both stream=true and stream=false against mocked agents. Full backend suite now passes 46/46."
     },
     {
       "id": "US-015",
