@@ -8,9 +8,10 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator
+from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from sse_starlette import EventSourceResponse
 
@@ -19,11 +20,34 @@ from backend.sessions_store import append_message, load_session
 
 app: FastAPI = FastAPI(title="Mini-OpenClaw Backend")
 
+PROJECT_ROOT: Path = Path(__file__).resolve().parents[1]
+ALLOWED_FILE_ROOTS: tuple[Path, ...] = (
+    PROJECT_ROOT / "backend" / "memory",
+    PROJECT_ROOT / "backend" / "workspace",
+    PROJECT_ROOT / "backend" / "skills",
+)
+
 
 class ChatRequest(BaseModel):
     message: str
     session_id: str
     stream: bool = True
+
+
+class FileWriteRequest(BaseModel):
+    path: str
+    content: str
+
+
+def _resolve_allowed_file_path(raw_path: str) -> Path:
+    candidate = (PROJECT_ROOT / raw_path).resolve()
+    for root in ALLOWED_FILE_ROOTS:
+        try:
+            candidate.relative_to(root.resolve())
+            return candidate
+        except ValueError:
+            continue
+    raise HTTPException(status_code=403, detail="path is outside allowed roots")
 
 
 def _coerce_text(content: Any) -> str:
@@ -142,6 +166,23 @@ async def chat(request: ChatRequest) -> Any:
     final_text = _extract_final_reply(result)
     append_message(request.session_id, {"role": "assistant", "content": final_text})
     return {"reply": final_text}
+
+
+@app.get("/api/files")
+def get_file(path: str) -> dict[str, str]:
+    resolved_path = _resolve_allowed_file_path(path)
+    try:
+        content = resolved_path.read_text(encoding="utf-8")
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="file not found") from exc
+    return {"path": path, "content": content}
+
+
+@app.post("/api/files")
+def save_file(request: FileWriteRequest) -> dict[str, str]:
+    resolved_path = _resolve_allowed_file_path(request.path)
+    resolved_path.write_text(request.content, encoding="utf-8")
+    return {"path": request.path, "content": request.content}
 
 
 if __name__ == "__main__":
