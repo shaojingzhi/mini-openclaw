@@ -200,8 +200,8 @@
         "Typecheck passes"
       ],
       "priority": 12,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented backend/graph/agent.py exporting `build_agent(model=None) -> CompiledStateGraph` that calls `from langchain.agents import create_agent` (NOT AgentExecutor / create_react_agent) with all five core tools (terminal, python_repl, fetch_url, read_file, search_knowledge_base) and the assembled system prompt from `backend.prompt_assembler.build_system_prompt()`. Model client is `langchain_openai.ChatOpenAI` constructed from env vars: OPENAI_API_KEY (defaults to 'EMPTY' so LM Studio / local servers work out of the box), OPENAI_BASE_URL (passed only when set so the upstream default is honored), OPENAI_MODEL (defaults to 'gpt-4o-mini'). `build_agent` accepts an optional `model` arg for test injection. Smoke test in backend/tests/test_agent.py uses a subclass of GenericFakeChatModel that overrides `bind_tools` to return self (the base class raises NotImplementedError; create_agent calls bind_tools to register the tool schema). 3 unittest cases: say-hello returns non-empty reply, all 5 core tool names registered, agent compiles without provider. All 33 backend tests pass."
     },
     {
       "id": "US-013",

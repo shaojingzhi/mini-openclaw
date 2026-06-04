@@ -33,6 +33,9 @@ Started: 2026年 6月 4日 星期四 00时57分56秒 CST
 - YAML frontmatter parsing: use regex `r"\A---[ \t]*\n(.*?)\n---[ \t]*(?:\n|\Z)"` with `re.DOTALL` to extract the block, then `yaml.safe_load` it. Handles both newline-terminated and EOF-terminated `---` fences. Fall back to defaults (folder name, empty string) when frontmatter is missing or `yaml.safe_load` raises — never crash a bootstrap pass.
 - Tests using `tempfile.TemporaryDirectory()` must keep ALL file-existence assertions INSIDE the `with` block. The tempdir is removed on `__exit__`; any `path.exists()` outside the block will return False even if the file was correctly created. (Bit me once on US-009's persistence test.)
 - After seeding a new `backend/skills/<name>/SKILL.md`, regenerate `backend/workspace/SKILLS_SNAPSHOT.md` by running `python -c "from backend.skills_loader import build_skills_snapshot; print(build_skills_snapshot())"` in the test venv. The committed snapshot should always reflect the current set of skills on disk. (US-014 startup hook will do this automatically; until then, do it manually whenever a SKILL.md is added/removed/renamed.)
+- LangChain 1.x agent factory: `from langchain.agents import create_agent` (NOT `AgentExecutor`, NOT `create_react_agent`). Signature: `create_agent(model, tools, *, system_prompt=None, middleware=(), response_format=None, state_schema=None, ...)`. Returns a `CompiledStateGraph` whose `.invoke({"messages": [{"role": "user", "content": "..."}]})` yields `{"messages": [...]}` with the assistant reply as the last item. The `system_prompt` arg accepts `str | SystemMessage | None`.
+- Mocking the LLM in agent tests: `create_agent` calls `model.bind_tools(tools)` before the first request. `GenericFakeChatModel` / `FakeListChatModel` inherit `BaseChatModel.bind_tools` which raises `NotImplementedError`. Subclass the fake model and override `bind_tools(self, tools, **kwargs)` to return `self` — the scripted reply passes through unchanged. Don't try to monkeypatch the method on an instance (Pydantic v2 model rejects it, per the US-006 pattern).
+- OpenAI-compatible model client: `langchain_openai.ChatOpenAI(model=..., api_key=..., base_url=...)`. `base_url` should only be passed when set (omitting it preserves the upstream OpenAI default; passing `None` triggers a deprecation path). The Pydantic field aliases are `openai_api_base` / `openai_api_key` but the kwargs `base_url` / `api_key` are the canonical surface in langchain-openai 1.2.x.
 ---
 
 ## 2026-06-04 - US-001
@@ -305,4 +308,30 @@ Started: 2026年 6月 4日 星期四 00时57分56秒 CST
   - `MAX_FILE_CHARS` is per-file, not aggregate. With 6 files at 20k each, the absolute upper bound on the assembled prompt is ~120k chars + 6 headers — well under typical model context windows (Claude/GPT-4o/etc. all comfortably handle this). If the aggregate ever becomes a concern, add a second-level cap in the assembler, not in callers.
   - Test pattern for module-level path constants: define them at module top (`WORKSPACE_DIR = ...`) and reference the bare name inside functions. Then `with patch.object(pa_mod, 'WORKSPACE_DIR', tmp_workspace)` actually takes effect — same gotcha that US-008 documented for `KNOWLEDGE_DIR`. Default-arg captures (`def f(x=WORKSPACE_DIR)`) would freeze the value at definition time.
   - Smoke test against committed files (`test_real_files_assemble_without_error`) is a cheap correctness check that catches "someone renamed a file in workspace/" regressions. Lightweight enough to keep as a permanent test.
+---
+
+## 2026-06-05 - US-012
+- Built the Mini-OpenClaw Agent via LangChain 1.x `create_agent` wired with the five core tools and the assembled System Prompt.
+- Files changed:
+  - `backend/graph/agent.py` (new — `build_agent(model=None) -> CompiledStateGraph`, `CORE_TOOLS` list, `_build_model()` env-driven `ChatOpenAI` factory).
+  - `backend/tests/test_agent.py` (new — 3 unittest cases: say-hello returns non-empty reply, all 5 core tool names registered, agent compiles without provider; uses a `_ToolBindingFakeChatModel` subclass that overrides `bind_tools` to return `self`).
+- Design notes:
+  - `from langchain.agents import create_agent` is the public 1.x entry point — confirmed re-exported in `langchain==1.3.4` (US-002 dep set). The factory returns a `CompiledStateGraph`; we treat it as opaque (no AgentExecutor / no `create_react_agent`, per US-012 acceptance criteria).
+  - `CORE_TOOLS = [terminal, python_repl, fetch_url, read_file, search_knowledge_base]` — module-level list so a future story (e.g. US-014 `/api/chat`) can iterate and report which tools are available without re-importing.
+  - `_build_model()` reads `OPENAI_API_KEY` (fallback `"EMPTY"` for local servers like LM Studio that ignore the key), `OPENAI_BASE_URL` (passed only if set so the upstream OpenAI default URL is preserved), `OPENAI_MODEL` (default `gpt-4o-mini`). This is the OpenAI-API-compatible surface the PRD §1.2 promises (OpenRouter / DeepSeek / Claude proxies all use the same shape).
+  - `build_agent(model=None)` accepts an injected model purely for tests — production callers omit it and let env vars drive the construction.
+  - System prompt is rebuilt fresh on every `build_agent()` call by delegating to `build_system_prompt()`. US-014 may want to cache the *agent* per-request anyway; do not pre-cache the prompt string.
+- Test wrinkles I hit:
+  - First test run failed at `request.model.bind_tools(...)` with `NotImplementedError` — `GenericFakeChatModel` inherits the base implementation that just raises. Fixed by subclassing and overriding `bind_tools` to return `self`. Don't try to monkeypatch the method on the instance (Pydantic v2 model rejects mutation, per the US-006 codebase pattern about Pydantic-protected attributes).
+  - `create_agent` returns a `dict` from `.invoke(...)`; the assistant reply is `result["messages"][-1].content`. The first message is the user input, intermediate are tool calls/results (none in our smoke test since the fake LLM returns a plain AIMessage with no tool_calls).
+- Verification:
+  - `python3 -m py_compile backend/graph/agent.py backend/tests/test_agent.py` → clean (host Python 3.14).
+  - `/tmp/mini-openclaw-test-venv/bin/python -W ignore -m unittest backend.tests.test_agent -v` → 3/3 OK in 0.007s.
+  - Full backend suite (`discover -s backend/tests`) → 33/33 OK in 0.538s (no regressions across the 6 prior modules).
+- **Learnings for future iterations:**
+  - The agent surface is `agent.invoke({"messages": [...]})` / `agent.astream({"messages": [...]})` / `agent.stream({"messages": [...]})`. US-014's SSE streaming will use `astream_events()` to surface `thought` / `tool_call` / `tool_result` / `final` events — the event types come from LangGraph's standard event taxonomy, not custom names.
+  - When mocking the LLM, override `bind_tools` to return `self` and use `iter([AIMessage(content=...)])` so the agent's first model call yields exactly one scripted reply. To force a tool-call path, pass `AIMessage(content="", tool_calls=[{"id": "...", "name": "<tool>", "args": {...}}])` — but our US-012 smoke test deliberately stays on the no-tool path to keep the seam tight.
+  - Env-var trio for OpenAI-compatible providers: `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_MODEL`. The PRD didn't pin specific names; these are the de-facto OpenAI SDK conventions that ChatOpenAI also reads natively (it would pick them up from `os.environ` even without our `_build_model()` plumbing, but the explicit read makes the contract greppable and gives us a single place to add a future fallback like a `.env` file).
+  - `langchain_openai.ChatOpenAI` exposes `base_url` / `api_key` as kwargs but stores them internally under the aliased fields `openai_api_base` / `openai_api_key`. Construction via either alias works in 1.2.x; we prefer the unaliased kwargs for readability.
+  - If you ever need to introspect what tools an agent was built with, do it via `agent.get_graph()` or the `CORE_TOOLS` module constant — there is no public `.tools` attribute on `CompiledStateGraph`. Keep `CORE_TOOLS` as the source of truth.
 ---
