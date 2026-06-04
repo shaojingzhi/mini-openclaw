@@ -253,8 +253,8 @@
         "Typecheck passes"
       ],
       "priority": 15,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Added GET /api/files and POST /api/files to backend/app.py with a strict allowlist over backend/memory, backend/workspace, and backend/skills. Path validation resolves both the requested path and each allowed root before relative_to() checks so tempdir-patched tests do not false-fail on mixed absolute/relative Paths. Added backend/tests/test_api_files.py covering allowed read, allowed write, traversal rejection, and outside-root rejection. Full backend suite now passes 49/49."
     },
     {
       "id": "US-016",

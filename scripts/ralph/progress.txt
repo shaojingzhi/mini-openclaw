@@ -3,6 +3,7 @@ Started: 2026年 6月 4日 星期四 00时57分56秒 CST
 ---
 
 ## Codebase Patterns
+- File-editor API path checks should resolve both the candidate path and each allowed root before calling `Path.relative_to(...)`. Mixed absolute/relative `Path` objects make in-root files look out-of-root and produce false 403s in tests.
 - `langchain` / `sse-starlette` mixed response endpoints in FastAPI must disable response-model generation: use `@app.post(..., response_model=None)` when the handler may return `EventSourceResponse` for SSE or a normal dict for non-stream mode. A union return annotation alone will make route registration fail.
 - LangChain agent streaming for UI/SSE should normalize two shapes: custom app-level events if the agent emits `{type/event_type: thought|tool_call|tool_result|final, data: ...}`, and raw `astream_events(version="v2")` events like `on_tool_start`, `on_tool_end`, `on_chat_model_stream` when working against plain `create_agent` output. Collect streamed chat-model chunks and synthesize one trailing `final` event if no explicit final arrives.
 - Python backend uses Python 3.10+ syntax with `from __future__ import annotations` and PEP 604/585 typing (e.g. `dict[str, str]`).
@@ -378,4 +379,19 @@ Started: 2026年 6月 4日 星期四 00时57分56秒 CST
   - `create_agent(...).astream_events(version="v2")` does not natively emit the PRD's `thought` / `tool_call` / `tool_result` / `final` names. The API layer should normalize raw LangChain events (`on_tool_start`, `on_tool_end`, `on_chat_model_stream`) into the frontend contract instead of coupling the UI to LangChain internals.
   - For SSE tests with `TestClient`, assert on `response.text` event blocks and keep any tempdir-backed file reads inside the `TemporaryDirectory()` context. The session JSON file is removed as soon as the context exits.
   - Mixed SSE/dict endpoints need `response_model=None` on the FastAPI route decorator; otherwise startup fails while FastAPI tries to build a Pydantic model from `EventSourceResponse | dict[...]`.
+---
+
+## 2026-06-05 01:51:51 CST - US-015
+- Implemented `GET /api/files` and `POST /api/files` in `backend/app.py` for reading and saving files under the allowed `backend/memory`, `backend/workspace`, and `backend/skills` roots.
+- Files changed:
+  - `backend/app.py` (added file-path allowlist resolution, `FileWriteRequest`, and the two `/api/files` endpoints)
+  - `backend/tests/test_api_files.py` (new — integration coverage for successful read, successful write, and rejected traversal/outside-root requests)
+- Verification:
+  - `python3 -m py_compile backend/app.py backend/tests/test_api_files.py` → clean.
+  - `/tmp/mini-openclaw-test-venv/bin/python -W ignore -m unittest backend.tests.test_api_files -v` → 3/3 OK.
+  - `/tmp/mini-openclaw-test-venv/bin/python -W ignore -m unittest discover -s backend/tests -v` → 49/49 OK.
+- **Learnings for future iterations:**
+  - The file API uses a stricter allowlist than the project-root tool sandbox: only `backend/memory`, `backend/workspace`, and `backend/skills` are writable/readable over HTTP. Keep the API-layer check separate from tool-level root guards.
+  - When tests patch `PROJECT_ROOT` and `ALLOWED_FILE_ROOTS`, `_resolve_allowed_file_path()` must re-resolve each allowed root before `relative_to(...)`; otherwise absolute tempdir candidates compared against relative repo roots yield false 403s.
+  - The endpoints currently echo `{path, content}` after writes, which matches the PRD and keeps the frontend save flow simple for US-018/US-023.
 ---
