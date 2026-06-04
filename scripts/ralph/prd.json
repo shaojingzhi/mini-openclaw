@@ -165,8 +165,8 @@
         "Typecheck passes"
       ],
       "priority": 10,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Created backend/skills/get_weather/SKILL.md with YAML frontmatter (name: get_weather, description in Chinese) and a body documenting two no-API-key flows: wttr.in (?format=j1) primary + Open-Meteo fallback (geocoding + forecast). Body explicitly instructs the agent to fetch_url first, then python_repl-parse the JSON — never fabricate data. Removed backend/skills/.gitkeep (real content now present, per US-001 convention). Re-ran `python -c 'from backend.skills_loader import build_skills_snapshot; print(build_skills_snapshot())'` — bootstrap picks up the skill and writes backend/workspace/SKILLS_SNAPSHOT.md with the get_weather <skill> entry. Full backend test suite still 25/25 OK (skills_loader's existing tests already cover the discovery path; no new tests required — US-010 is content-only)."
     },
     {
       "id": "US-011",

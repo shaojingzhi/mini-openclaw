@@ -32,6 +32,7 @@ Started: 2026年 6月 4日 星期四 00时57分56秒 CST
 - `PyYAML 6.0.3` is a stable TRANSITIVE dep (required by langchain-core, langchain-community, langchain-classic, llama-index-core) — `import yaml` is safe anywhere in `backend/` without adding to `requirements.txt`. The same is true for other heavy transitives: check `pip show <pkg>` in `/tmp/mini-openclaw-test-venv` before deciding to pin a new direct dep that may already be present.
 - YAML frontmatter parsing: use regex `r"\A---[ \t]*\n(.*?)\n---[ \t]*(?:\n|\Z)"` with `re.DOTALL` to extract the block, then `yaml.safe_load` it. Handles both newline-terminated and EOF-terminated `---` fences. Fall back to defaults (folder name, empty string) when frontmatter is missing or `yaml.safe_load` raises — never crash a bootstrap pass.
 - Tests using `tempfile.TemporaryDirectory()` must keep ALL file-existence assertions INSIDE the `with` block. The tempdir is removed on `__exit__`; any `path.exists()` outside the block will return False even if the file was correctly created. (Bit me once on US-009's persistence test.)
+- After seeding a new `backend/skills/<name>/SKILL.md`, regenerate `backend/workspace/SKILLS_SNAPSHOT.md` by running `python -c "from backend.skills_loader import build_skills_snapshot; print(build_skills_snapshot())"` in the test venv. The committed snapshot should always reflect the current set of skills on disk. (US-014 startup hook will do this automatically; until then, do it manually whenever a SKILL.md is added/removed/renamed.)
 ---
 
 ## 2026-06-04 - US-001
@@ -251,4 +252,35 @@ Started: 2026年 6月 4日 星期四 00时57分56秒 CST
   - When writing tempdir-based tests, ALL assertions about files must be inside the `with tempfile.TemporaryDirectory() as tmp:` block. The directory (and everything inside) is gone the moment the with block exits — `out.exists()` will return False even if the file was correctly written 1 line earlier.
   - US-010 will add `backend/skills/get_weather/SKILL.md` with proper `name:` / `description:` frontmatter. After US-010 commits, re-running `python -m backend.skills_loader` (or whatever startup hook US-014 wires) will repopulate SKILLS_SNAPSHOT.md with the get_weather entry. The current committed SKILLS_SNAPSHOT.md (empty wrapper) is a placeholder that will be overwritten on first bootstrap with a real skill present.
   - US-011 (prompt assembler) will read SKILLS_SNAPSHOT.md as the FIRST of 6 sections. The empty-wrapper output is well-formed XML and won't break concatenation; no special-case for "no skills" is needed in US-011.
+---
+
+## 2026-06-05 - US-010
+- Added the example `get_weather` Agent Skill so the skill loop is demonstrable end-to-end.
+- Files changed:
+  - `backend/skills/get_weather/SKILL.md` (new — YAML frontmatter `name: get_weather` + Chinese description; body documents two free-no-key flows: wttr.in `?format=j1` primary + Open-Meteo geocoding+forecast fallback, with concrete `fetch_url` URLs and `python_repl` snippets for JSON parsing).
+  - `backend/skills/.gitkeep` (deleted — real content now lives in `get_weather/`, follows US-001/US-003 "remove .gitkeep when seeding real files" convention).
+  - `backend/workspace/SKILLS_SNAPSHOT.md` (regenerated via `python -c "from backend.skills_loader import build_skills_snapshot; print(build_skills_snapshot())"` — now contains the `<skill>` entry for get_weather instead of the empty wrapper US-009 seeded).
+- Design notes:
+  - Body is in Chinese to match the SOUL.md/IDENTITY.md/USER.md/AGENTS.md voice — the agent's working language defaults to Chinese (per US-003 SOUL.md).
+  - The skill body **explicitly instructs the agent to call `fetch_url` first, then `python_repl`** — never to fabricate weather data. This is the contract that makes the "instruction-following" skill paradigm (PRD §3.1) work, and it doubles as a sanity check that the AGENTS.md SKILL PROTOCOL ("read the SKILL.md before acting") flows through to a real example.
+  - Chose `wttr.in?format=j1` as the primary path because it is the simplest free-no-key option that returns structured JSON. Open-Meteo is the documented fallback (two-step: geocode then forecast) for when wttr.in is rate-limited or down.
+  - No new code, no new tests — US-010 is content-only. The existing `backend/tests/test_skills_loader.py` cases (especially `test_emits_xml_for_discovered_skill`) already cover the discovery path that picks this skill up.
+- Verification:
+  - `/tmp/mini-openclaw-test-venv/bin/python -W ignore -m unittest discover -s backend/tests -v` → 25/25 OK (no regressions).
+  - Snapshot regeneration ran cleanly and emitted the expected XML:
+    ```
+    <available_skills>
+      <skill>
+        <name>get_weather</name>
+        <description>获取指定城市（或经纬度）的实时天气信息。使用免费的 wttr.in 或 Open-Meteo API，不需要 API Key。</description>
+        <location>./backend/skills/get_weather/SKILL.md</location>
+      </skill>
+    </available_skills>
+    ```
+- **Learnings for future iterations:**
+  - The `<description>` text from frontmatter is XML-escaped at snapshot-build time (`xml.sax.saxutils.escape`). Authors of future SKILL.md files don't need to manually escape `<`/`>`/`&` in the YAML — but they should avoid putting literal quotes inside YAML scalars without proper YAML quoting (e.g. wrap the value in double quotes if it contains `:` or `#`).
+  - When adding/removing/renaming SKILL.md files, manually regenerate `backend/workspace/SKILLS_SNAPSHOT.md` until US-014 wires a startup hook. The committed snapshot is part of the data baseline (US-011 will read it on agent startup) — leaving it stale would mean the agent's first prompt advertises a skill list that doesn't match disk.
+  - SKILL.md body content does NOT need to be markdown-headed (`#`, `##`, etc.) — it is read verbatim by the agent through `read_file`. But headings DO help when humans read it in the Inspector panel (US-023). Pick a format that reads well in both contexts.
+  - Default skill voice is Chinese; if a future skill targets English-only users, that is fine, but the SOUL.md persona will still answer the user in their language, not the skill's. The skill content language doesn't constrain the agent's reply language.
+  - PRD §3.1 / §3.2 distinction matters: skills are **instructions**, not function-call definitions. There is no `args_schema` for a skill; the agent reads SKILL.md and executes the documented procedure with core tools. Future stories adding skills should not be tempted to write Python files inside `skills/<name>/` — only markdown.
 ---
