@@ -182,8 +182,8 @@
         "Typecheck passes"
       ],
       "priority": 11,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented backend/prompt_assembler.py with `build_system_prompt() -> str`. Reads the six source files in the PRD §4.2 order (SKILLS_SNAPSHOT → SOUL → IDENTITY → USER → AGENTS → MEMORY) from `WORKSPACE_DIR` / `MEMORY_DIR` module-level constants, separates each with a `# === <name> ===` header, and truncates any single file longer than `MAX_FILE_CHARS = 20_000` by slicing to the limit and appending the literal `...[truncated]` marker. Missing files fall through to a `(file not found)` placeholder instead of crashing — matches the graceful-empty pattern from US-008/US-009. Module-level constants (not default args) are used so `patch.object(pa_mod, 'WORKSPACE_DIR', ...)` works in tests (Codebase Patterns note from US-008 applied). 5 unittest cases in backend/tests/test_prompt_assembler.py: required-order concatenation, oversized-file truncation marker, short-files-no-marker, missing-file placeholder, smoke test against the real committed files. All 30 backend tests pass."
     },
     {
       "id": "US-012",

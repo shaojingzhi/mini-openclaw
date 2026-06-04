@@ -284,3 +284,25 @@ Started: 2026年 6月 4日 星期四 00时57分56秒 CST
   - Default skill voice is Chinese; if a future skill targets English-only users, that is fine, but the SOUL.md persona will still answer the user in their language, not the skill's. The skill content language doesn't constrain the agent's reply language.
   - PRD §3.1 / §3.2 distinction matters: skills are **instructions**, not function-call definitions. There is no `args_schema` for a skill; the agent reads SKILL.md and executes the documented procedure with core tools. Future stories adding skills should not be tempted to write Python files inside `skills/<name>/` — only markdown.
 ---
+
+## 2026-06-05 - US-011
+- Implemented the System Prompt assembler that concatenates the six prompt source files in the PRD §4.2 order with per-file truncation.
+- Files changed:
+  - `backend/prompt_assembler.py` (new — `build_system_prompt() -> str`; reads `WORKSPACE_DIR` / `MEMORY_DIR` module-level constants; emits `# === <name> ===` headers; truncates over `MAX_FILE_CHARS = 20_000` with literal `...[truncated]` marker; missing files become `(file not found)` placeholder).
+  - `backend/tests/test_prompt_assembler.py` (new — 5 unittest cases: order, oversized-truncation, short-no-marker, missing-file placeholder, real-files smoke).
+- Design notes:
+  - Section order is hard-coded in `_section_paths()`. The pairs are `(display_name, absolute_path)` so the header always reads the friendly basename even if the path moves.
+  - `MAX_FILE_CHARS` and `TRUNCATION_MARKER` are module-level constants so tests assert the exact wording and future stories can extend the limit without rewriting the assembler. Truncation is a hard char-cap (`content[:limit] + TRUNCATION_MARKER`) — not whitespace-aware. The PRD specifies "append `...[truncated]`", which we take literally.
+  - `_load_file` swallows `OSError` and substitutes `MISSING_FILE_PLACEHOLDER`. This matches the US-008/US-009 graceful-empty pattern: the agent's first turn should never fail to start because one of the prompt files happened to be missing on disk.
+  - Sections are joined with a single blank line (`"\n\n".join(...)`) and the assembled string carries a final newline. Both downstream consumers (`create_agent`'s `system_prompt` in US-012, and the Inspector panel rendering in US-023) handle trailing whitespace correctly.
+- Verification:
+  - `python3 -m py_compile backend/prompt_assembler.py backend/tests/test_prompt_assembler.py` → clean (host Python 3.14).
+  - `/tmp/mini-openclaw-test-venv/bin/python -W ignore -m unittest backend.tests.test_prompt_assembler -v` → 5/5 OK in 0.005s.
+  - Full backend suite → 30/30 OK in 0.557s (no regressions across the 5 prior modules).
+- **Learnings for future iterations:**
+  - The header format is `# === <name> ===` (note the spaces around `===`). US-022 chat-stage UI and US-023 Inspector should NOT collapse this whitespace when rendering raw prompts — the equals padding is the documented separator per PRD §4.2 example.
+  - `build_system_prompt()` re-reads the source files on every call. That's intentional for v1 — users will edit MEMORY.md and SKILL.md files via the Inspector and expect the agent to pick up changes on the next request. US-014 (`/api/chat`) should call `build_system_prompt()` per request, not cache it. If caching is needed for performance, key on file `mtime` rather than introducing manual invalidation.
+  - `MAX_FILE_CHARS` is per-file, not aggregate. With 6 files at 20k each, the absolute upper bound on the assembled prompt is ~120k chars + 6 headers — well under typical model context windows (Claude/GPT-4o/etc. all comfortably handle this). If the aggregate ever becomes a concern, add a second-level cap in the assembler, not in callers.
+  - Test pattern for module-level path constants: define them at module top (`WORKSPACE_DIR = ...`) and reference the bare name inside functions. Then `with patch.object(pa_mod, 'WORKSPACE_DIR', tmp_workspace)` actually takes effect — same gotcha that US-008 documented for `KNOWLEDGE_DIR`. Default-arg captures (`def f(x=WORKSPACE_DIR)`) would freeze the value at definition time.
+  - Smoke test against committed files (`test_real_files_assemble_without_error`) is a cheap correctness check that catches "someone renamed a file in workspace/" regressions. Lightweight enough to keep as a permanent test.
+---
