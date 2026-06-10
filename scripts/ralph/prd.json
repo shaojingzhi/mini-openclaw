@@ -301,8 +301,8 @@
         "Typecheck passes"
       ],
       "priority": 18,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Created frontend/src/lib/api.ts exporting typed `streamChat`, `getFile`, `saveFile`, and `listSessions` helpers. Base URL reads from NEXT_PUBLIC_API_URL with a localhost:8002 default. `streamChat` posts to /api/chat with stream=true, incrementally parses SSE blocks from fetch() ReadableStream output, and yields the four typed event variants (thought/tool_call/tool_result/final) without using `any`. Verified `npm run typecheck --prefix frontend` and `npm run build --prefix frontend` both pass."
     },
     {
       "id": "US-019",

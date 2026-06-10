@@ -3,6 +3,7 @@ Started: 2026年 6月 4日 星期四 00时57分56秒 CST
 ---
 
 ## Codebase Patterns
+- Frontend API wrappers should centralize the backend origin in one `buildApiUrl()` helper that reads `NEXT_PUBLIC_API_URL` with the localhost fallback. Keep `streamChat` on `fetch` + `ReadableStream.getReader()` instead of `EventSource` so it can use POST `/api/chat` and share the same typed parsing path as the rest of the client.
 - Session-list endpoints that depend on patched storage paths should import the storage module (`from backend import sessions_store`) and dereference `sessions_store.SESSIONS_DIR` / `sessions_store.load_session(...)` at call time. Copying those names into `backend.app` at import time breaks `patch.object(..., "SESSIONS_DIR", ...)` tests and can desync runtime state.
 - File-editor API path checks should resolve both the candidate path and each allowed root before calling `Path.relative_to(...)`. Mixed absolute/relative `Path` objects make in-root files look out-of-root and produce false 403s in tests.
 - `langchain` / `sse-starlette` mixed response endpoints in FastAPI must disable response-model generation: use `@app.post(..., response_model=None)` when the handler may return `EventSourceResponse` for SSE or a normal dict for non-stream mode. A union return annotation alone will make route registration fail.
@@ -430,4 +431,18 @@ Started: 2026年 6月 4日 星期四 00时57分56秒 CST
   - Pin `next` and `eslint-config-next` together to the same patch version. `next@14.2.33` currently emits an upstream security warning during install; `14.2.35` is the patched 14.2 line.
   - The current scaffold uses `@/*` path aliases from `frontend/tsconfig.json`; future frontend stories should import through that alias instead of long relative paths.
   - Manual browser verification still needs a real browser tool. For this story I verified the runtime by starting the dev server and checking the HTTP response only.
+---
+
+## 2026-06-10 23:16:50 CST - US-018
+- Built `frontend/src/lib/api.ts` as the typed frontend client for the backend on port 8002.
+- Files changed:
+  - `frontend/src/lib/api.ts` (new — exports `streamChat`, `getFile`, `saveFile`, `listSessions`, typed SSE event unions, shared base-URL helper, and HTTP error handling without `any`)
+- Verification:
+  - `npm run typecheck --prefix /Users/alice/LLM-learning/mini-openclaw/frontend` → clean.
+  - `npm run build --prefix /Users/alice/LLM-learning/mini-openclaw/frontend` → succeeds on Next.js 14.2.35.
+- **Learnings for future iterations:**
+  - The chat API is POST-only, so frontend streaming must use `fetch()` with `response.body.getReader()` and manual SSE frame parsing; browser `EventSource` cannot send the required request body.
+  - Keep frontend API responses typed as small transport-layer shapes (`FilePayload`, `SessionSummary`, `ChatEvent`) and normalize backend quirks at the edge so UI stories can consume a stable union type.
+  - `new URL(path, API_BASE_URL)` is the safest way to join frontend API paths because it handles both bare origins and slash-suffixed environment overrides without double-slash bugs.
+  - Manual browser verification was not needed for this story because it adds a library module only; build + typecheck were the relevant acceptance checks.
 ---
