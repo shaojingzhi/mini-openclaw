@@ -32,9 +32,28 @@ const inspectorNotes = [
 
 export default function Home() {
   return (
-    <main className="min-h-screen bg-[radial-gradient(circle_at_top_left,_rgba(29,78,216,0.12),_transparent_34%),radial-gradient(circle_at_bottom_right,_rgba(245,158,11,0.12),_transparent_28%),#fafafa] px-4 py-4 text-foreground sm:px-6 lg:px-8">
-      <div className="mx-auto flex min-h-[calc(100vh-2rem)] w-full max-w-[1600px] flex-col rounded-[30px] border border-white/80 bg-white/55 p-3 shadow-[0_28px_120px_rgba(15,23,42,0.10)] backdrop-blur-xl sm:p-4">
-        <section className="grid min-h-[calc(100vh-4rem)] gap-3 lg:grid-cols-[240px_minmax(0,1fr)] xl:grid-cols-[240px_minmax(0,1fr)_420px]">
+    <main className="min-h-screen bg-[radial-gradient(circle_at_top_left,_rgba(29,78,216,0.12),_transparent_34%),radial-gradient(circle_at_bottom_right,_rgba(245,158,11,0.12),_transparent_28%),#fafafa] px-4 pb-4 pt-24 text-foreground sm:px-6 sm:pt-28 lg:px-8">
+      <div className="fixed inset-x-4 top-4 z-20 sm:inset-x-6 lg:inset-x-8">
+        <div className="mx-auto flex h-16 w-full max-w-[1600px] items-center justify-between rounded-[24px] border border-white/80 bg-white/65 px-5 shadow-[0_18px_60px_rgba(15,23,42,0.10)] backdrop-blur-xl sm:px-6">
+          <div className="flex items-center gap-3">
+            <span className="rounded-full border border-primary/15 bg-primary/[0.08] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.3em] text-primary/70">
+              IDE
+            </span>
+            <span className="text-lg font-semibold tracking-tight text-[#002FA7] sm:text-xl">mini OpenClaw</span>
+          </div>
+          <a
+            className="text-sm font-medium text-slate-600 transition-colors hover:text-slate-950"
+            href="https://fufan.ai"
+            rel="noreferrer"
+            target="_blank"
+          >
+            赋范空间
+          </a>
+        </div>
+      </div>
+
+      <div className="mx-auto flex min-h-[calc(100vh-7rem)] w-full max-w-[1600px] flex-col rounded-[30px] border border-white/80 bg-white/55 p-3 shadow-[0_28px_120px_rgba(15,23,42,0.10)] backdrop-blur-xl sm:min-h-[calc(100vh-8rem)] sm:p-4">
+        <section className="grid min-h-[calc(100vh-9rem)] gap-3 sm:min-h-[calc(100vh-10rem)] lg:grid-cols-[240px_minmax(0,1fr)] xl:grid-cols-[240px_minmax(0,1fr)_420px]">
           <aside className="rounded-[26px] border border-white/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.86),rgba(248,250,252,0.72))] p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.7)]">
             <div className="space-y-5">
               <div>
