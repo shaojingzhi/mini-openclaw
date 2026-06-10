@@ -1,31 +1,37 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Bot, FileCode2, History, PanelRightOpen, Sparkles, WandSparkles } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import {
+  Bot,
+  ChevronDown,
+  FileCode2,
+  History,
+  Loader2,
+  PanelRightOpen,
+  Sparkles,
+  WandSparkles,
+} from "lucide-react";
 
-import { listSessions, type SessionSummary } from "@/lib/api";
+import { listSessions, streamChat, type ChatEvent, type SessionSummary } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
-const navItems = [
-  {
-    id: "chat",
-    label: "Chat",
-    icon: Bot,
-  },
-  {
-    id: "memory",
-    label: "Memory",
-    icon: History,
-  },
-  {
-    id: "skills",
-    label: "Skills",
-    icon: Sparkles,
-  },
-] as const;
+type NavId = "chat" | "memory" | "skills";
 
-type NavId = (typeof navItems)[number]["id"];
+type TraceItem =
+  | { kind: "thought"; content: string }
+  | { kind: "tool_call"; name: string; input?: unknown }
+  | { kind: "tool_result"; name: string; content: string };
+
+type ChatMessage =
+  | { id: string; role: "user"; content: string }
+  | { id: string; role: "assistant"; content: string; trace: TraceItem[] };
+
+const navItems: Array<{ id: NavId; label: string; icon: typeof Bot }> = [
+  { id: "chat", label: "Chat", icon: Bot },
+  { id: "memory", label: "Memory", icon: History },
+  { id: "skills", label: "Skills", icon: Sparkles },
+];
 
 const inspectorNotes = [
   "System prompt files remain editable and visible to the operator.",
@@ -33,10 +39,158 @@ const inspectorNotes = [
   "The inspector collapses below desktop width to keep the chat stage readable.",
 ];
 
+const starterMessages: ChatMessage[] = [
+  {
+    id: "starter-user",
+    role: "user",
+    content: "Map the next UI milestones and keep the reasoning visible without turning the stage into clutter.",
+  },
+  {
+    id: "starter-assistant",
+    role: "assistant",
+    content:
+      "The shell is in place: a fixed-width sidebar, a flexible stage, and an inspector rail reserved for editable prompt files and skill docs.",
+    trace: [
+      {
+        kind: "thought",
+        content: "The chat stage should show the work without making the final answer harder to scan.",
+      },
+      {
+        kind: "tool_call",
+        name: "listSessions",
+        input: { source: "sidebar bootstrap" },
+      },
+      {
+        kind: "tool_result",
+        name: "listSessions",
+        content: "Session metadata is available for the active conversation context.",
+      },
+    ],
+  },
+];
+
+function createSessionId(): string {
+  return `session-${Date.now()}`;
+}
+
+function createMessageId(prefix: string): string {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function formatTimestamp(value: string): string {
+  if (!value) {
+    return "No activity yet";
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return date.toLocaleString();
+}
+
+function stringifyToolInput(input: unknown): string {
+  if (typeof input === "string") {
+    return input;
+  }
+
+  if (input == null) {
+    return "{}";
+  }
+
+  try {
+    return JSON.stringify(input, null, 2);
+  } catch {
+    return String(input);
+  }
+}
+
+function appendEvent(message: Extract<ChatMessage, { role: "assistant" }>, event: ChatEvent): Extract<ChatMessage, { role: "assistant" }> {
+  if (event.type === "final") {
+    return { ...message, content: message.content + event.content };
+  }
+
+  if (event.type === "thought") {
+    return {
+      ...message,
+      trace: [...message.trace, { kind: "thought", content: event.content }],
+    };
+  }
+
+  if (event.type === "tool_call") {
+    return {
+      ...message,
+      trace: [...message.trace, { kind: "tool_call", name: event.name, input: event.input }],
+    };
+  }
+
+  return {
+    ...message,
+    trace: [...message.trace, { kind: "tool_result", name: event.name, content: event.content }],
+  };
+}
+
+function TraceBlock({ messageId, trace }: { messageId: string; trace: TraceItem[] }) {
+  if (trace.length === 0) {
+    return null;
+  }
+
+  return (
+    <details className="mt-4 rounded-2xl border border-primary/10 bg-white/75" id={`${messageId}-trace`}>
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-medium text-slate-700 marker:content-none">
+        <span>Reasoning trace</span>
+        <span className="flex items-center gap-2 text-xs uppercase tracking-[0.22em] text-slate-500">
+          {trace.length} events
+          <ChevronDown className="h-4 w-4 transition-transform group-open:rotate-180" />
+        </span>
+      </summary>
+      <div className="space-y-3 border-t border-slate-200/80 px-4 py-4">
+        {trace.map((item, index) => {
+          if (item.kind === "thought") {
+            return (
+              <article key={`${messageId}-thought-${index}`} className="rounded-2xl border border-slate-200/80 bg-slate-50/80 p-4">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500">Thought</p>
+                <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">{item.content}</p>
+              </article>
+            );
+          }
+
+          if (item.kind === "tool_call") {
+            return (
+              <article key={`${messageId}-tool-call-${index}`} className="rounded-2xl border border-amber-200/80 bg-amber-50/70 p-4">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-amber-700">Tool Call</p>
+                <p className="mt-2 text-sm font-medium text-slate-900">{item.name}</p>
+                <pre className="mt-3 overflow-x-auto whitespace-pre-wrap break-words rounded-xl bg-white/85 p-3 text-xs leading-6 text-slate-600">
+                  {stringifyToolInput(item.input)}
+                </pre>
+              </article>
+            );
+          }
+
+          return (
+            <article key={`${messageId}-tool-result-${index}`} className="rounded-2xl border border-emerald-200/80 bg-emerald-50/70 p-4">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-emerald-700">Tool Result</p>
+              <p className="mt-2 text-sm font-medium text-slate-900">{item.name}</p>
+              <pre className="mt-3 overflow-x-auto whitespace-pre-wrap break-words rounded-xl bg-white/85 p-3 text-xs leading-6 text-slate-600">
+                {item.content}
+              </pre>
+            </article>
+          );
+        })}
+      </div>
+    </details>
+  );
+}
+
 export default function Home() {
   const [activeNav, setActiveNav] = useState<NavId>("chat");
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
-  const [activeSessionId, setActiveSessionId] = useState<string>("session-alpha");
+  const [activeSessionId, setActiveSessionId] = useState<string>("");
+  const [messages, setMessages] = useState<Record<string, ChatMessage[]>>({});
+  const [draft, setDraft] = useState("Ask the agent to inspect a skill, fetch a file, or explain the current session.");
+  const [isStreaming, setIsStreaming] = useState(false);
+  const [streamError, setStreamError] = useState<string | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -48,12 +202,15 @@ export default function Home() {
         }
 
         setSessions(items);
-        setActiveSessionId((current) => current || items[0]?.name || "session-alpha");
+        setActiveSessionId((current) => current || items[0]?.name || createSessionId());
       })
       .catch(() => {
-        if (mounted) {
-          setSessions([]);
+        if (!mounted) {
+          return;
         }
+
+        setSessions([]);
+        setActiveSessionId((current) => current || createSessionId());
       });
 
     return () => {
@@ -61,8 +218,98 @@ export default function Home() {
     };
   }, []);
 
-  const activeSession = sessions.find((session) => session.name === activeSessionId) ?? sessions[0];
+  const activeSession = sessions.find((session) => session.name === activeSessionId) ?? null;
   const activeNavLabel = navItems.find((item) => item.id === activeNav)?.label ?? "Chat";
+  const sessionMessages = useMemo(() => {
+    if (!activeSessionId) {
+      return starterMessages;
+    }
+
+    return messages[activeSessionId] ?? starterMessages;
+  }, [activeSessionId, messages]);
+
+  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    const trimmed = draft.trim();
+    if (!trimmed || isStreaming || !activeSessionId) {
+      return;
+    }
+
+    const userMessage: ChatMessage = {
+      id: createMessageId("user"),
+      role: "user",
+      content: trimmed,
+    };
+    const assistantId = createMessageId("assistant");
+    const assistantSeed: Extract<ChatMessage, { role: "assistant" }> = {
+      id: assistantId,
+      role: "assistant",
+      content: "",
+      trace: [],
+    };
+
+    setDraft("");
+    setStreamError(null);
+    setIsStreaming(true);
+    setMessages((current) => ({
+      ...current,
+      [activeSessionId]: [...(current[activeSessionId] ?? []), userMessage, assistantSeed],
+    }));
+
+    try {
+      for await (const chatEvent of streamChat(trimmed, activeSessionId)) {
+        setMessages((current) => {
+          const nextMessages = [...(current[activeSessionId] ?? [])];
+          const index = nextMessages.findIndex((message) => message.id === assistantId && message.role === "assistant");
+
+          if (index === -1) {
+            return current;
+          }
+
+          const currentAssistant = nextMessages[index] as Extract<ChatMessage, { role: "assistant" }>;
+          nextMessages[index] = appendEvent(currentAssistant, chatEvent);
+
+          return {
+            ...current,
+            [activeSessionId]: nextMessages,
+          };
+        });
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Streaming failed";
+      setStreamError(message);
+      setMessages((current) => {
+        const nextMessages = [...(current[activeSessionId] ?? [])];
+        const index = nextMessages.findIndex((item) => item.id === assistantId && item.role === "assistant");
+
+        if (index === -1) {
+          return current;
+        }
+
+        const failedAssistant = nextMessages[index] as Extract<ChatMessage, { role: "assistant" }>;
+        nextMessages[index] = {
+          ...failedAssistant,
+          content: failedAssistant.content || "The stream ended before the assistant returned a final reply.",
+          trace: [
+            ...failedAssistant.trace,
+            {
+              kind: "tool_result",
+              name: "stream_error",
+              content: message,
+            },
+          ],
+        };
+
+        return {
+          ...current,
+          [activeSessionId]: nextMessages,
+        };
+      });
+    } finally {
+      setIsStreaming(false);
+    }
+  }
 
   return (
     <main className="min-h-screen bg-[radial-gradient(circle_at_top_left,_rgba(29,78,216,0.12),_transparent_34%),radial-gradient(circle_at_bottom_right,_rgba(245,158,11,0.12),_transparent_28%),#fafafa] px-4 pb-4 pt-24 text-foreground sm:px-6 sm:pt-28 lg:px-8">
@@ -112,10 +359,7 @@ export default function Home() {
                       onClick={() => setActiveNav(item.id)}
                       type="button"
                     >
-                      <Icon className={[
-                        "h-4 w-4",
-                        active ? "text-primary" : "text-slate-400",
-                      ].join(" ")}/>
+                      <Icon className={["h-4 w-4", active ? "text-primary" : "text-slate-400"].join(" ")} />
                       {item.label}
                     </button>
                   );
@@ -129,7 +373,10 @@ export default function Home() {
                 </div>
                 <div className="mt-4 max-h-[420px] space-y-2 overflow-y-auto pr-1">
                   {sessions.length === 0 ? (
-                    <p className="rounded-2xl border border-dashed border-slate-200 px-4 py-3 text-sm text-slate-500">No sessions yet.</p>
+                    <div className="rounded-2xl border border-dashed border-slate-200 px-4 py-3 text-sm text-slate-500">
+                      <p>No sessions yet.</p>
+                      <p className="mt-1 text-xs">The chat stage will keep working with a local draft session.</p>
+                    </div>
                   ) : (
                     sessions.map((session) => {
                       const active = session.name === activeSessionId;
@@ -150,7 +397,7 @@ export default function Home() {
                             <span className="truncate text-sm font-medium text-slate-900">{session.name}</span>
                             <span className="text-xs text-slate-500">{session.message_count} msgs</span>
                           </div>
-                          <p className="mt-1 text-xs text-slate-500">{session.last_modified}</p>
+                          <p className="mt-1 text-xs text-slate-500">{formatTimestamp(session.last_modified)}</p>
                         </button>
                       );
                     })
@@ -166,44 +413,55 @@ export default function Home() {
                 <div className="space-y-2">
                   <p className="text-xs font-semibold uppercase tracking-[0.32em] text-primary/60">Stage</p>
                   <h2 className="text-3xl font-semibold tracking-tight text-slate-950">{activeNavLabel} workspace</h2>
-                  <p className="max-w-2xl text-sm leading-6 text-slate-600">This center column stays dominant while the right inspector hides below desktop width.</p>
+                  <p className="max-w-2xl text-sm leading-6 text-slate-600">The stage now streams agent events live and tucks thought traces behind a collapsible block on every assistant reply.</p>
                 </div>
                 <div className="flex items-center gap-3 rounded-2xl border border-slate-200/80 bg-white/90 px-3 py-3 shadow-sm">
-                  <WandSparkles className="h-4 w-4 text-primary" />
-                  <span className="text-sm font-medium text-slate-700">Session {activeSession?.name ?? activeSessionId}</span>
+                  {isStreaming ? <Loader2 className="h-4 w-4 animate-spin text-primary" /> : <WandSparkles className="h-4 w-4 text-primary" />}
+                  <span className="text-sm font-medium text-slate-700">Session {activeSession?.name ?? activeSessionId ?? "draft"}</span>
                 </div>
               </div>
 
               <div className="flex flex-1 flex-col justify-between gap-6 pt-6">
-                <div className="space-y-4">
-                  <article className="max-w-[82%] rounded-[24px] border border-slate-200/80 bg-white/90 p-5 shadow-sm">
-                    <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">User</p>
-                    <p className="mt-3 text-sm leading-7 text-slate-700">Map the next UI milestones and keep the reasoning visible without turning the stage into clutter.</p>
-                  </article>
+                <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
+                  {sessionMessages.map((message) => {
+                    if (message.role === "user") {
+                      return (
+                        <article key={message.id} className="max-w-[82%] rounded-[24px] border border-slate-200/80 bg-white/90 p-5 shadow-sm">
+                          <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">User</p>
+                          <p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-slate-700">{message.content}</p>
+                        </article>
+                      );
+                    }
 
-                  <article className="ml-auto max-w-[88%] rounded-[24px] border border-primary/15 bg-[linear-gradient(135deg,rgba(255,255,255,0.94),rgba(219,234,254,0.92))] p-5 shadow-[0_20px_50px_rgba(37,99,235,0.10)]">
-                    <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.22em] text-primary/70">
-                      <Bot className="h-4 w-4" />
-                      Assistant
-                    </div>
-                    <p className="mt-3 text-sm leading-7 text-slate-700">The shell is in place: a fixed-width sidebar, a flexible stage, and an inspector rail reserved for editable prompt files and skill docs.</p>
-                    <div className="mt-4 rounded-2xl border border-primary/10 bg-white/75 p-4">
-                      <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">Upcoming streamed block</p>
-                      <p className="mt-2 text-sm leading-6 text-slate-600">Thoughts, tool calls, and tool results will stack here as a collapsible trace in the next story.</p>
-                    </div>
-                  </article>
+                    return (
+                      <article key={message.id} className="ml-auto max-w-[88%] rounded-[24px] border border-primary/15 bg-[linear-gradient(135deg,rgba(255,255,255,0.94),rgba(219,234,254,0.92))] p-5 shadow-[0_20px_50px_rgba(37,99,235,0.10)]">
+                        <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.22em] text-primary/70">
+                          <Bot className="h-4 w-4" />
+                          Assistant
+                        </div>
+                        <p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-slate-700">
+                          {message.content || (isStreaming ? "Streaming response..." : "Waiting for assistant output.")}
+                        </p>
+                        <TraceBlock messageId={message.id} trace={message.trace} />
+                      </article>
+                    );
+                  })}
                 </div>
 
                 <div className="rounded-[26px] border border-slate-200/80 bg-white/88 p-4 shadow-sm">
-                  <div className="flex flex-col gap-3 lg:flex-row">
+                  <form className="flex flex-col gap-3 lg:flex-row" onSubmit={handleSubmit}>
                     <Input
                       aria-label="Chat composer"
                       className="h-14 rounded-2xl border-slate-200 bg-slate-50/80 px-4 text-base"
-                      defaultValue="Ask the agent to inspect a skill, fetch a file, or explain the current session."
-                      readOnly
+                      onChange={(event) => setDraft(event.target.value)}
+                      placeholder="Ask the agent to inspect a skill, fetch a file, or explain the current session."
+                      value={draft}
                     />
-                    <Button className="h-14 rounded-2xl px-6 text-base lg:min-w-36">Send</Button>
-                  </div>
+                    <Button className="h-14 rounded-2xl px-6 text-base lg:min-w-36" disabled={isStreaming || !draft.trim()} type="submit">
+                      {isStreaming ? "Streaming..." : "Send"}
+                    </Button>
+                  </form>
+                  {streamError ? <p className="mt-3 text-sm text-rose-600">{streamError}</p> : null}
                 </div>
               </div>
             </section>
