@@ -3,6 +3,7 @@ Started: 2026年 6月 4日 星期四 00时57分56秒 CST
 ---
 
 ## Codebase Patterns
+- Frontend shell uses a fixed top nav mounted as a sibling above the main frosted workspace card. When adding persistent chrome, offset the page with top padding (`pt-24` / `sm:pt-28`) and shrink the shell min-height instead of nesting the nav inside the card.
 - Frontend API wrappers should centralize the backend origin in one `buildApiUrl()` helper that reads `NEXT_PUBLIC_API_URL` with the localhost fallback. Keep `streamChat` on `fetch` + `ReadableStream.getReader()` instead of `EventSource` so it can use POST `/api/chat` and share the same typed parsing path as the rest of the client.
 - Session-list endpoints that depend on patched storage paths should import the storage module (`from backend import sessions_store`) and dereference `sessions_store.SESSIONS_DIR` / `sessions_store.load_session(...)` at call time. Copying those names into `backend.app` at import time breaks `patch.object(..., "SESSIONS_DIR", ...)` tests and can desync runtime state.
 - File-editor API path checks should resolve both the candidate path and each allowed root before calling `Path.relative_to(...)`. Mixed absolute/relative `Path` objects make in-root files look out-of-root and produce false 403s in tests.
@@ -462,3 +463,20 @@ Started: 2026年 6月 4日 星期四 00时57分56秒 CST
   - Using `xl:grid-cols-[240px_minmax(0,1fr)_420px]` with `hidden xl:flex` on the inspector is the simplest way to satisfy the responsive-collapse requirement for v1 without adding a draggable-resize system yet.
   - Manual browser verification used the local dev server only; a real browser/MCP visual check is still needed in a later UI pass if that tooling becomes available.
 ---
+
+## 2026-06-11 00:34:00 CST - US-020
+- Implemented a fixed frosted top navigation bar above the existing three-column shell with Klein Blue branding and the required external link.
+- Files changed:
+  - `frontend/src/app/page.tsx` (added the fixed glass nav, adjusted top padding/min-height so the workspace shell clears it, preserved the existing three-column layout)
+  - `scripts/ralph/prd.json` (marked US-020 as passing)
+  - `scripts/ralph/progress.txt` (added a reusable shell-layout pattern and this progress entry)
+- Verification:
+  - `npm run typecheck --prefix /Users/alice/LLM-learning/mini-openclaw/frontend` -> clean.
+  - `npm run build --prefix /Users/alice/LLM-learning/mini-openclaw/frontend` -> succeeds on Next.js 14.2.35.
+  - `npm run dev --prefix /Users/alice/LLM-learning/mini-openclaw/frontend -- --port 3002` -> starts cleanly; `curl -I http://127.0.0.1:3002` returned `HTTP/1.1 200 OK`.
+- **Learnings for future iterations:**
+  - The fixed top nav works best as a sibling above the main frosted workspace card, not inside it; otherwise the card border and blur stack awkwardly when the page scrolls.
+  - When adding persistent top chrome to this shell, adjust page top padding and shell min-height together so the viewport math stays correct across desktop and mobile breakpoints.
+  - Manual browser verification still needs a real browser/MCP visual pass; this iteration validated the live page via the local dev server only.
+---
+
