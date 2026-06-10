@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -16,7 +17,7 @@ from pydantic import BaseModel
 from sse_starlette import EventSourceResponse
 
 from backend.graph.agent import build_agent
-from backend.sessions_store import append_message, load_session
+from backend import sessions_store
 
 app: FastAPI = FastAPI(title="Mini-OpenClaw Backend")
 
@@ -65,6 +66,18 @@ def _coerce_text(content: Any) -> str:
                     parts.append(text)
         return "".join(parts)
     return str(content) if content is not None else ""
+
+
+def _session_metadata(path: Path) -> dict[str, Any]:
+    stat = path.stat()
+    return {
+        "name": path.stem,
+        "last_modified": datetime.fromtimestamp(
+            stat.st_mtime,
+            tz=timezone.utc,
+        ).isoformat(),
+        "message_count": len(sessions_store.load_session(path.stem)),
+    }
 
 
 def _extract_final_reply(result: Any) -> str:
@@ -134,9 +147,12 @@ async def _stream_agent_events(
 
 
 async def _chat_sse(request: ChatRequest) -> AsyncIterator[dict[str, str]]:
-    append_message(request.session_id, {"role": "user", "content": request.message})
+    sessions_store.append_message(
+        request.session_id,
+        {"role": "user", "content": request.message},
+    )
     agent = build_agent()
-    payload = {"messages": load_session(request.session_id)}
+    payload = {"messages": sessions_store.load_session(request.session_id)}
     final_text = ""
 
     async for event_type, event_payload in _stream_agent_events(agent, payload):
@@ -147,7 +163,10 @@ async def _chat_sse(request: ChatRequest) -> AsyncIterator[dict[str, str]]:
             "data": json.dumps(event_payload, ensure_ascii=False),
         }
 
-    append_message(request.session_id, {"role": "assistant", "content": final_text})
+    sessions_store.append_message(
+        request.session_id,
+        {"role": "assistant", "content": final_text},
+    )
 
 
 @app.get("/health")
@@ -160,11 +179,20 @@ async def chat(request: ChatRequest) -> Any:
     if request.stream:
         return EventSourceResponse(_chat_sse(request))
 
-    append_message(request.session_id, {"role": "user", "content": request.message})
+    sessions_store.append_message(
+        request.session_id,
+        {"role": "user", "content": request.message},
+    )
     agent = build_agent()
-    result = await _invoke_agent(agent, {"messages": load_session(request.session_id)})
+    result = await _invoke_agent(
+        agent,
+        {"messages": sessions_store.load_session(request.session_id)},
+    )
     final_text = _extract_final_reply(result)
-    append_message(request.session_id, {"role": "assistant", "content": final_text})
+    sessions_store.append_message(
+        request.session_id,
+        {"role": "assistant", "content": final_text},
+    )
     return {"reply": final_text}
 
 
@@ -183,6 +211,19 @@ def save_file(request: FileWriteRequest) -> dict[str, str]:
     resolved_path = _resolve_allowed_file_path(request.path)
     resolved_path.write_text(request.content, encoding="utf-8")
     return {"path": request.path, "content": request.content}
+
+
+@app.get("/api/sessions")
+def list_sessions() -> dict[str, list[dict[str, Any]]]:
+    if not sessions_store.SESSIONS_DIR.exists():
+        return {"sessions": []}
+
+    sessions = [
+        _session_metadata(path)
+        for path in sorted(sessions_store.SESSIONS_DIR.glob("*.json"))
+        if path.is_file()
+    ]
+    return {"sessions": sessions}
 
 
 if __name__ == "__main__":

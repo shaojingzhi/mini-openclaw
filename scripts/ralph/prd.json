@@ -269,8 +269,8 @@
         "Typecheck passes"
       ],
       "priority": 16,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Added GET /api/sessions to backend/app.py, listing backend/sessions/*.json as {name, last_modified, message_count}. last_modified is emitted as a UTC ISO-8601 string derived from file mtime, and message_count is computed via sessions_store.load_session(name) so corrupt/missing JSON still degrades gracefully to 0/[] semantics instead of crashing the route. Added backend/tests/test_api_sessions.py covering seeded two-session listing and missing-directory empty response. Full backend suite now passes 51/51."
     },
     {
       "id": "US-017",
@@ -286,8 +286,8 @@
         "Typecheck passes"
       ],
       "priority": 17,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Scaffolded frontend/ as a Next.js 14 App Router project with strict TypeScript, Tailwind CSS, and a shadcn-compatible components.json baseline. Added base shadcn UI primitives (button/input/dropdown), lucide-react, a shared cn() helper, and a placeholder landing page in src/app/page.tsx. Verified `npm run dev --prefix frontend` starts cleanly on localhost:3000, `npm run build --prefix frontend` succeeds on Next 14.2.35, and `npm run typecheck --prefix frontend` passes."
     },
     {
       "id": "US-018",

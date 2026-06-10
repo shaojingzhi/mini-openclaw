@@ -3,6 +3,7 @@ Started: 2026年 6月 4日 星期四 00时57分56秒 CST
 ---
 
 ## Codebase Patterns
+- Session-list endpoints that depend on patched storage paths should import the storage module (`from backend import sessions_store`) and dereference `sessions_store.SESSIONS_DIR` / `sessions_store.load_session(...)` at call time. Copying those names into `backend.app` at import time breaks `patch.object(..., "SESSIONS_DIR", ...)` tests and can desync runtime state.
 - File-editor API path checks should resolve both the candidate path and each allowed root before calling `Path.relative_to(...)`. Mixed absolute/relative `Path` objects make in-root files look out-of-root and produce false 403s in tests.
 - `langchain` / `sse-starlette` mixed response endpoints in FastAPI must disable response-model generation: use `@app.post(..., response_model=None)` when the handler may return `EventSourceResponse` for SSE or a normal dict for non-stream mode. A union return annotation alone will make route registration fail.
 - LangChain agent streaming for UI/SSE should normalize two shapes: custom app-level events if the agent emits `{type/event_type: thought|tool_call|tool_result|final, data: ...}`, and raw `astream_events(version="v2")` events like `on_tool_start`, `on_tool_end`, `on_chat_model_stream` when working against plain `create_agent` output. Collect streamed chat-model chunks and synthesize one trailing `final` event if no explicit final arrives.
@@ -381,7 +382,7 @@ Started: 2026年 6月 4日 星期四 00时57分56秒 CST
   - Mixed SSE/dict endpoints need `response_model=None` on the FastAPI route decorator; otherwise startup fails while FastAPI tries to build a Pydantic model from `EventSourceResponse | dict[...]`.
 ---
 
-## 2026-06-05 01:51:51 CST - US-015
+## 2026-06-05 02:58:19 CST - US-015
 - Implemented `GET /api/files` and `POST /api/files` in `backend/app.py` for reading and saving files under the allowed `backend/memory`, `backend/workspace`, and `backend/skills` roots.
 - Files changed:
   - `backend/app.py` (added file-path allowlist resolution, `FileWriteRequest`, and the two `/api/files` endpoints)
@@ -394,4 +395,39 @@ Started: 2026年 6月 4日 星期四 00时57分56秒 CST
   - The file API uses a stricter allowlist than the project-root tool sandbox: only `backend/memory`, `backend/workspace`, and `backend/skills` are writable/readable over HTTP. Keep the API-layer check separate from tool-level root guards.
   - When tests patch `PROJECT_ROOT` and `ALLOWED_FILE_ROOTS`, `_resolve_allowed_file_path()` must re-resolve each allowed root before `relative_to(...)`; otherwise absolute tempdir candidates compared against relative repo roots yield false 403s.
   - The endpoints currently echo `{path, content}` after writes, which matches the PRD and keeps the frontend save flow simple for US-018/US-023.
+---
+
+## 2026-06-05 02:58:19 CST - US-016
+- Implemented `GET /api/sessions` in `backend/app.py` to list session JSON files as `{name, last_modified, message_count}` for the sidebar.
+- Files changed:
+  - `backend/app.py` (added `_session_metadata()` and the `/api/sessions` endpoint; reads session storage through `backend.sessions_store` at call time so patched storage roots stay in sync)
+  - `backend/tests/test_api_sessions.py` (new — integration coverage for seeded two-session listing and missing-directory empty response)
+- Verification:
+  - `python3 -m py_compile backend/app.py backend/tests/test_api_sessions.py` → clean.
+  - `/tmp/mini-openclaw-test-venv/bin/python -W ignore -m unittest backend.tests.test_api_sessions -v` → 2/2 OK.
+  - `/tmp/mini-openclaw-test-venv/bin/python -W ignore -m unittest discover -s backend/tests -v` → 51/51 OK.
+- **Learnings for future iterations:**
+  - If an API route needs to honor monkey-patched session storage in tests, import the module (`from backend import sessions_store`) and read `sessions_store.SESSIONS_DIR` / `sessions_store.load_session(...)` at request time. Importing the names directly into `backend.app` freezes the old bindings and breaks tempdir-backed tests.
+  - `last_modified` is currently the file mtime serialized as a UTC ISO-8601 string. Frontend code for US-021 can treat it as an opaque timestamp string and format it client-side.
+  - Frontend stories should use `npm --prefix frontend <command>` from the repo root instead of relying on `cd frontend`; it keeps commands consistent with the backend workflow and works cleanly in automation/hooks.
+- Next.js rewrites `frontend/next-env.d.ts` during build/dev startup. Treat it as generated state and let the framework own its exact comment block.
+- For frontend dependency verification here, `npm run typecheck --prefix frontend`, `npm run build --prefix frontend`, and an HTTP 200 from `npm run dev --prefix frontend` on localhost are the practical acceptance checks. `npm install` may emit upstream deprecation or audit warnings; only treat non-zero exits as blockers.
+
+## 2026-06-05 11:45:58 CST - US-017
+- Scaffolded `frontend/` as a Next.js 14 App Router project with strict TypeScript, Tailwind CSS, shadcn-compatible config, and lucide-react.
+- Files changed:
+  - `frontend/package.json`, `frontend/package-lock.json`, `frontend/tsconfig.json`, `frontend/next.config.mjs`, `frontend/next-env.d.ts`, `frontend/postcss.config.js`, `frontend/tailwind.config.ts`, `frontend/.gitignore`
+  - `frontend/components.json`
+  - `frontend/src/app/layout.tsx`, `frontend/src/app/page.tsx`, `frontend/src/app/globals.css`
+  - `frontend/src/lib/utils.ts`
+  - `frontend/src/components/ui/button.tsx`, `frontend/src/components/ui/input.tsx`, `frontend/src/components/ui/dropdown-menu.tsx`
+- Verification:
+  - `npm run typecheck --prefix /Users/alice/LLM-learning/mini-openclaw/frontend` → clean.
+  - `npm run build --prefix /Users/alice/LLM-learning/mini-openclaw/frontend` → succeeds on Next.js 14.2.35.
+  - `npm run dev --prefix /Users/alice/LLM-learning/mini-openclaw/frontend` → starts cleanly on `http://localhost:3000`; `curl -I http://127.0.0.1:3000` returned `HTTP/1.1 200 OK`.
+- **Learnings for future iterations:**
+  - Shadcn setup in this repo is file-based, not CLI-managed: keep `components.json`, `src/lib/utils.ts`, and the `src/components/ui/*` primitives in sync when adding more components.
+  - Pin `next` and `eslint-config-next` together to the same patch version. `next@14.2.33` currently emits an upstream security warning during install; `14.2.35` is the patched 14.2 line.
+  - The current scaffold uses `@/*` path aliases from `frontend/tsconfig.json`; future frontend stories should import through that alias instead of long relative paths.
+  - Manual browser verification still needs a real browser tool. For this story I verified the runtime by starting the dev server and checking the HTTP response only.
 ---
