@@ -42,6 +42,7 @@ Started: 2026年 6月 4日 星期四 00时57分56秒 CST
 - Mocking the LLM in agent tests: `create_agent` calls `model.bind_tools(tools)` before the first request. `GenericFakeChatModel` / `FakeListChatModel` inherit `BaseChatModel.bind_tools` which raises `NotImplementedError`. Subclass the fake model and override `bind_tools(self, tools, **kwargs)` to return `self` — the scripted reply passes through unchanged. Don't try to monkeypatch the method on an instance (Pydantic v2 model rejects it, per the US-006 pattern).
 - OpenAI-compatible model client: `langchain_openai.ChatOpenAI(model=..., api_key=..., base_url=...)`. `base_url` should only be passed when set (omitting it preserves the upstream OpenAI default; passing `None` triggers a deprecation path). The Pydantic field aliases are `openai_api_base` / `openai_api_key` but the kwargs `base_url` / `api_key` are the canonical surface in langchain-openai 1.2.x.
 - Session persistence (US-013) lives in `backend/sessions_store.py` exposing `load_session(name) -> list[dict]` + `append_message(name, message) -> list[dict]`. Sessions stored at `backend/sessions/{name}.json` as JSON arrays with roles `user` / `assistant` / `tool` (set in `ALLOWED_ROLES`). Session names are validated against `^[A-Za-z0-9._-]+$` to prevent path traversal — DO NOT allow `/`, `..`, or empty names. Writes are atomic via `.tmp` + `Path.replace`. Load on missing/corrupt files returns `[]` (never raises) so a single bad session can't crash agent startup. US-014's `/api/chat` should call these directly: persist the incoming user message before invoking the agent, then persist the final assistant message after streaming completes.
+- For App Router layout shells, drive the desktop three-column structure from the page-level grid with `lg:grid-cols-[240px_minmax(0,1fr)] xl:grid-cols-[240px_minmax(0,1fr)_420px]` and hide the inspector below `xl`. That keeps the left rail visible on laptops while satisfying the v1 "collapse the inspector under 1024px-ish" requirement without a resize system.
 ---
 
 ## 2026-06-04 - US-001
@@ -445,4 +446,19 @@ Started: 2026年 6月 4日 星期四 00时57分56秒 CST
   - Keep frontend API responses typed as small transport-layer shapes (`FilePayload`, `SessionSummary`, `ChatEvent`) and normalize backend quirks at the edge so UI stories can consume a stable union type.
   - `new URL(path, API_BASE_URL)` is the safest way to join frontend API paths because it handles both bare origins and slash-suffixed environment overrides without double-slash bugs.
   - Manual browser verification was not needed for this story because it adds a library module only; build + typecheck were the relevant acceptance checks.
+---
+
+## 2026-06-10 23:39:58 CST - US-019
+- Implemented the three-column IDE shell in the frontend landing page with a fixed left rail, dominant center stage, and desktop-only inspector rail over a frosted `#fafafa` surface.
+- Files changed:
+  - `frontend/src/app/page.tsx` (replaced the scaffold hero with the IDE-style shell layout, placeholder session list, stage content, and inspector preview)
+  - `frontend/src/app/globals.css` (retuned theme tokens and page background to match the frosty glass treatment)
+- Verification:
+  - `npm run typecheck --prefix frontend` → clean.
+  - `npm run build --prefix frontend` → succeeds on Next.js 14.2.35.
+  - `npm run dev --prefix frontend` started on `http://localhost:3001` because port 3000 was already occupied; `curl -I http://127.0.0.1:3001` returned `HTTP/1.1 200 OK`.
+- **Learnings for future iterations:**
+  - The current page shell already reserves the structural slots US-020/021/022/023 need, so those stories should layer behavior onto the existing sidebar/stage/inspector sections instead of rebuilding the page frame.
+  - Using `xl:grid-cols-[240px_minmax(0,1fr)_420px]` with `hidden xl:flex` on the inspector is the simplest way to satisfy the responsive-collapse requirement for v1 without adding a draggable-resize system yet.
+  - Manual browser verification used the local dev server only; a real browser/MCP visual check is still needed in a later UI pass if that tooling becomes available.
 ---
