@@ -4,6 +4,7 @@ Started: 2026年 6月 4日 星期四 00时57分56秒 CST
 
 ## Codebase Patterns
 - Frontend sidebar interactions in `frontend/src/app/page.tsx` can stay client-only for now: fetch `/api/sessions` inside `useEffect`, keep `activeNav` and `activeSessionId` in local state, and derive the visible highlight classes from that state instead of hard-coded placeholder booleans.
+- Frontend chat transcripts can stay page-local too: keep `Record<sessionId, ChatMessage[]>` state in `frontend/src/app/page.tsx`, seed a per-session assistant placeholder before starting `streamChat()`, and fold each SSE event into that placeholder so `final` text and the reasoning trace stay attached to one visible bubble.
 - Frontend shell uses a fixed top nav mounted as a sibling above the main frosted workspace card. When adding persistent chrome, offset the page with top padding (`pt-24` / `sm:pt-28`) and shrink the shell min-height instead of nesting the nav inside the card.
 - Frontend API wrappers should centralize the backend origin in one `buildApiUrl()` helper that reads `NEXT_PUBLIC_API_URL` with the localhost fallback. Keep `streamChat` on `fetch` + `ReadableStream.getReader()` instead of `EventSource` so it can use POST `/api/chat` and share the same typed parsing path as the rest of the client.
 - Session-list endpoints that depend on patched storage paths should import the storage module (`from backend import sessions_store`) and dereference `sessions_store.SESSIONS_DIR` / `sessions_store.load_session(...)` at call time. Copying those names into `backend.app` at import time breaks `patch.object(..., "SESSIONS_DIR", ...)` tests and can desync runtime state.
@@ -481,18 +482,20 @@ Started: 2026年 6月 4日 星期四 00时57分56秒 CST
   - Manual browser verification still needs a real browser/MCP visual pass; this iteration validated the live page via the local dev server only.
 ---
 
-## 2026-06-11 00:42:00 CST - US-021
-- Wired the left sidebar to real session data from `GET /api/sessions`, added local state for the active top-level section and active session, and replaced the hard-coded placeholder highlights with interactive selection.
+## 2026-06-11 00:47:55 CST - US-022
+- Implemented the center chat stage with a real message transcript, live SSE streaming via `streamChat()`, and per-assistant collapsible reasoning blocks that group `thought`, `tool_call`, and `tool_result` events above the final reply.
 - Files changed:
-  - `frontend/src/app/page.tsx` (converted the page to a client component, loaded `listSessions()` on mount, rendered the API-backed session list, and highlighted the active nav item/session row from component state)
-  - `scripts/ralph/prd.json` (marked US-021 as passing)
-  - `scripts/ralph/progress.txt` (added a reusable sidebar-state pattern and this progress entry)
+  - `frontend/src/app/page.tsx` (replaced the static stage mock with session-scoped message state, submit handling, streaming updates, collapsible trace rendering, disabled send state, and inline stream-error handling)
+  - `scripts/ralph/prd.json` (marked US-022 as passing)
+  - `scripts/ralph/progress.txt` (added a reusable chat-stage state pattern and this progress entry)
 - Verification:
   - `npm run typecheck --prefix /Users/alice/LLM-learning/mini-openclaw/frontend` -> clean.
   - `npm run build --prefix /Users/alice/LLM-learning/mini-openclaw/frontend` -> succeeds on Next.js 14.2.35.
+  - `npm run dev --prefix /Users/alice/LLM-learning/mini-openclaw/frontend -- --port 3003` -> starts cleanly; `curl -I http://127.0.0.1:3003` returned `HTTP/1.1 200 OK`.
 - **Learnings for future iterations:**
-  - This shell can keep sidebar behavior entirely in `frontend/src/app/page.tsx` until the chat stage and inspector need to share state more broadly; there is no need for a global store yet.
-  - Use the backend session `name` as both the React key and the active `session_id` source of truth so the later chat stream and inspector stories can reuse the same selected session directly.
-  - Manual browser verification is still pending because no browser/MCP tool is available in this environment.
+  - The chat stage can keep transcript state local to `frontend/src/app/page.tsx` until the inspector needs to read or edit the same messages; there is still no need for a global store before US-023.
+  - For streaming UX, create the assistant bubble before the first SSE event arrives and mutate that same bubble as events land; this prevents layout jumps and keeps the collapsible trace bound to the final answer.
+  - `details`/`summary` is enough for the v1 collapsible trace block and stays collapsed by default without extra React state.
+  - Manual browser verification used the local dev server plus HTTP response only; a real interactive browser pass is still pending because no browser/MCP tool is available here.
 ---
 
