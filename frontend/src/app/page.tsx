@@ -1,28 +1,31 @@
+"use client";
+
+import { useEffect, useState } from "react";
 import { Bot, FileCode2, History, PanelRightOpen, Sparkles, WandSparkles } from "lucide-react";
 
+import { listSessions, type SessionSummary } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
-const sessions = [
+const navItems = [
   {
-    id: "session-alpha",
-    title: "Agent bootstrap",
-    time: "2m ago",
-    active: true,
+    id: "chat",
+    label: "Chat",
+    icon: Bot,
   },
   {
-    id: "session-beta",
-    title: "Memory review",
-    time: "21m ago",
-    active: false,
+    id: "memory",
+    label: "Memory",
+    icon: History,
   },
   {
-    id: "session-gamma",
-    title: "Skill tuning",
-    time: "Yesterday",
-    active: false,
+    id: "skills",
+    label: "Skills",
+    icon: Sparkles,
   },
-];
+] as const;
+
+type NavId = (typeof navItems)[number]["id"];
 
 const inspectorNotes = [
   "System prompt files remain editable and visible to the operator.",
@@ -31,6 +34,36 @@ const inspectorNotes = [
 ];
 
 export default function Home() {
+  const [activeNav, setActiveNav] = useState<NavId>("chat");
+  const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [activeSessionId, setActiveSessionId] = useState<string>("session-alpha");
+
+  useEffect(() => {
+    let mounted = true;
+
+    void listSessions()
+      .then((items) => {
+        if (!mounted) {
+          return;
+        }
+
+        setSessions(items);
+        setActiveSessionId((current) => current || items[0]?.name || "session-alpha");
+      })
+      .catch(() => {
+        if (mounted) {
+          setSessions([]);
+        }
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  const activeSession = sessions.find((session) => session.name === activeSessionId) ?? sessions[0];
+  const activeNavLabel = navItems.find((item) => item.id === activeNav)?.label ?? "Chat";
+
   return (
     <main className="min-h-screen bg-[radial-gradient(circle_at_top_left,_rgba(29,78,216,0.12),_transparent_34%),radial-gradient(circle_at_bottom_right,_rgba(245,158,11,0.12),_transparent_28%),#fafafa] px-4 pb-4 pt-24 text-foreground sm:px-6 sm:pt-28 lg:px-8">
       <div className="fixed inset-x-4 top-4 z-20 sm:inset-x-6 lg:inset-x-8">
@@ -62,44 +95,66 @@ export default function Home() {
                 <p className="mt-2 text-sm leading-6 text-slate-600">IDE-style agent shell with live sessions, staged reasoning, and file-first inspection.</p>
               </div>
 
-              <nav className="space-y-2">
-                <button className="flex w-full items-center gap-3 rounded-2xl border border-primary/15 bg-primary/[0.08] px-4 py-3 text-left text-sm font-medium text-slate-950 shadow-sm">
-                  <Bot className="h-4 w-4 text-primary" />
-                  Chat
-                </button>
-                <button className="flex w-full items-center gap-3 rounded-2xl px-4 py-3 text-left text-sm text-slate-600 transition-colors hover:bg-white/70 hover:text-slate-950">
-                  <History className="h-4 w-4 text-slate-400" />
-                  Memory
-                </button>
-                <button className="flex w-full items-center gap-3 rounded-2xl px-4 py-3 text-left text-sm text-slate-600 transition-colors hover:bg-white/70 hover:text-slate-950">
-                  <Sparkles className="h-4 w-4 text-slate-400" />
-                  Skills
-                </button>
+              <nav className="space-y-2" aria-label="Primary">
+                {navItems.map((item) => {
+                  const Icon = item.icon;
+                  const active = item.id === activeNav;
+
+                  return (
+                    <button
+                      key={item.id}
+                      className={[
+                        "flex w-full items-center gap-3 rounded-2xl border px-4 py-3 text-left text-sm transition-all",
+                        active
+                          ? "border-primary/20 bg-primary/[0.08] font-medium text-slate-950 shadow-sm"
+                          : "border-transparent bg-transparent text-slate-600 hover:border-slate-200 hover:bg-white/70 hover:text-slate-950",
+                      ].join(" ")}
+                      onClick={() => setActiveNav(item.id)}
+                      type="button"
+                    >
+                      <Icon className={[
+                        "h-4 w-4",
+                        active ? "text-primary" : "text-slate-400",
+                      ].join(" ")}/>
+                      {item.label}
+                    </button>
+                  );
+                })}
               </nav>
 
               <div className="rounded-[24px] border border-slate-200/80 bg-white/80 p-4">
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between gap-3">
                   <p className="text-xs font-semibold uppercase tracking-[0.26em] text-slate-500">Sessions</p>
-                  <span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-medium text-slate-500">3</span>
+                  <span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-medium text-slate-500">{sessions.length}</span>
                 </div>
                 <div className="mt-4 max-h-[420px] space-y-2 overflow-y-auto pr-1">
-                  {sessions.map((session) => (
-                    <button
-                      key={session.id}
-                      className={[
-                        "w-full rounded-2xl border px-4 py-3 text-left transition-all",
-                        session.active
-                          ? "border-primary/20 bg-[linear-gradient(135deg,rgba(37,99,235,0.10),rgba(255,255,255,0.92))] shadow-sm"
-                          : "border-transparent bg-transparent hover:border-slate-200 hover:bg-white/70",
-                      ].join(" ")}
-                    >
-                      <div className="flex items-center justify-between gap-3">
-                        <span className="truncate text-sm font-medium text-slate-900">{session.title}</span>
-                        <span className="text-xs text-slate-500">{session.time}</span>
-                      </div>
-                      <p className="mt-1 text-xs text-slate-500">session_id: {session.id}</p>
-                    </button>
-                  ))}
+                  {sessions.length === 0 ? (
+                    <p className="rounded-2xl border border-dashed border-slate-200 px-4 py-3 text-sm text-slate-500">No sessions yet.</p>
+                  ) : (
+                    sessions.map((session) => {
+                      const active = session.name === activeSessionId;
+
+                      return (
+                        <button
+                          key={session.name}
+                          className={[
+                            "w-full rounded-2xl border px-4 py-3 text-left transition-all",
+                            active
+                              ? "border-primary/20 bg-[linear-gradient(135deg,rgba(37,99,235,0.10),rgba(255,255,255,0.92))] shadow-sm"
+                              : "border-transparent bg-transparent hover:border-slate-200 hover:bg-white/70",
+                          ].join(" ")}
+                          onClick={() => setActiveSessionId(session.name)}
+                          type="button"
+                        >
+                          <div className="flex items-center justify-between gap-3">
+                            <span className="truncate text-sm font-medium text-slate-900">{session.name}</span>
+                            <span className="text-xs text-slate-500">{session.message_count} msgs</span>
+                          </div>
+                          <p className="mt-1 text-xs text-slate-500">{session.last_modified}</p>
+                        </button>
+                      );
+                    })
+                  )}
                 </div>
               </div>
             </div>
@@ -110,12 +165,12 @@ export default function Home() {
               <div className="flex flex-col gap-4 border-b border-slate-200/80 pb-5 sm:flex-row sm:items-end sm:justify-between">
                 <div className="space-y-2">
                   <p className="text-xs font-semibold uppercase tracking-[0.32em] text-primary/60">Stage</p>
-                  <h2 className="text-3xl font-semibold tracking-tight text-slate-950">Transparent agent session</h2>
+                  <h2 className="text-3xl font-semibold tracking-tight text-slate-950">{activeNavLabel} workspace</h2>
                   <p className="max-w-2xl text-sm leading-6 text-slate-600">This center column stays dominant while the right inspector hides below desktop width.</p>
                 </div>
                 <div className="flex items-center gap-3 rounded-2xl border border-slate-200/80 bg-white/90 px-3 py-3 shadow-sm">
                   <WandSparkles className="h-4 w-4 text-primary" />
-                  <span className="text-sm font-medium text-slate-700">Ready for streaming chat UI</span>
+                  <span className="text-sm font-medium text-slate-700">Session {activeSession?.name ?? activeSessionId}</span>
                 </div>
               </div>
 
