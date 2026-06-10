@@ -3,25 +3,25 @@
 @tailwind utilities;
 
 :root {
-  --background: 210 20% 98%;
+  --background: 0 0% 98%;
   --foreground: 222 47% 11%;
   --card: 0 0% 100%;
   --card-foreground: 222 47% 11%;
   --popover: 0 0% 100%;
   --popover-foreground: 222 47% 11%;
-  --primary: 250 100% 43%;
+  --primary: 221 83% 45%;
   --primary-foreground: 210 40% 98%;
-  --secondary: 210 40% 96%;
+  --secondary: 210 33% 96%;
   --secondary-foreground: 222 47% 11%;
-  --muted: 210 40% 96%;
+  --muted: 210 33% 96%;
   --muted-foreground: 215 16% 47%;
-  --accent: 210 40% 96%;
+  --accent: 210 33% 96%;
   --accent-foreground: 222 47% 11%;
   --destructive: 0 84% 60%;
   --destructive-foreground: 210 40% 98%;
-  --border: 214 32% 91%;
-  --input: 214 32% 91%;
-  --ring: 250 100% 43%;
+  --border: 214 32% 89%;
+  --input: 214 32% 89%;
+  --ring: 221 83% 45%;
   --radius: 0.9rem;
 }
 
@@ -29,6 +29,15 @@
   @apply border-border;
 }
 
+html {
+  background: #fafafa;
+}
+
 body {
   @apply bg-background text-foreground antialiased;
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at top left, rgba(37, 99, 235, 0.1), transparent 28%),
+    radial-gradient(circle at bottom right, rgba(245, 158, 11, 0.08), transparent 24%),
+    #fafafa;
 }
