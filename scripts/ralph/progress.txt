@@ -3,6 +3,7 @@ Started: 2026年 6月 4日 星期四 00时57分56秒 CST
 ---
 
 ## Codebase Patterns
+- Frontend sidebar interactions in `frontend/src/app/page.tsx` can stay client-only for now: fetch `/api/sessions` inside `useEffect`, keep `activeNav` and `activeSessionId` in local state, and derive the visible highlight classes from that state instead of hard-coded placeholder booleans.
 - Frontend shell uses a fixed top nav mounted as a sibling above the main frosted workspace card. When adding persistent chrome, offset the page with top padding (`pt-24` / `sm:pt-28`) and shrink the shell min-height instead of nesting the nav inside the card.
 - Frontend API wrappers should centralize the backend origin in one `buildApiUrl()` helper that reads `NEXT_PUBLIC_API_URL` with the localhost fallback. Keep `streamChat` on `fetch` + `ReadableStream.getReader()` instead of `EventSource` so it can use POST `/api/chat` and share the same typed parsing path as the rest of the client.
 - Session-list endpoints that depend on patched storage paths should import the storage module (`from backend import sessions_store`) and dereference `sessions_store.SESSIONS_DIR` / `sessions_store.load_session(...)` at call time. Copying those names into `backend.app` at import time breaks `patch.object(..., "SESSIONS_DIR", ...)` tests and can desync runtime state.
@@ -478,5 +479,20 @@ Started: 2026年 6月 4日 星期四 00时57分56秒 CST
   - The fixed top nav works best as a sibling above the main frosted workspace card, not inside it; otherwise the card border and blur stack awkwardly when the page scrolls.
   - When adding persistent top chrome to this shell, adjust page top padding and shell min-height together so the viewport math stays correct across desktop and mobile breakpoints.
   - Manual browser verification still needs a real browser/MCP visual pass; this iteration validated the live page via the local dev server only.
+---
+
+## 2026-06-11 00:42:00 CST - US-021
+- Wired the left sidebar to real session data from `GET /api/sessions`, added local state for the active top-level section and active session, and replaced the hard-coded placeholder highlights with interactive selection.
+- Files changed:
+  - `frontend/src/app/page.tsx` (converted the page to a client component, loaded `listSessions()` on mount, rendered the API-backed session list, and highlighted the active nav item/session row from component state)
+  - `scripts/ralph/prd.json` (marked US-021 as passing)
+  - `scripts/ralph/progress.txt` (added a reusable sidebar-state pattern and this progress entry)
+- Verification:
+  - `npm run typecheck --prefix /Users/alice/LLM-learning/mini-openclaw/frontend` -> clean.
+  - `npm run build --prefix /Users/alice/LLM-learning/mini-openclaw/frontend` -> succeeds on Next.js 14.2.35.
+- **Learnings for future iterations:**
+  - This shell can keep sidebar behavior entirely in `frontend/src/app/page.tsx` until the chat stage and inspector need to share state more broadly; there is no need for a global store yet.
+  - Use the backend session `name` as both the React key and the active `session_id` source of truth so the later chat stream and inspector stories can reuse the same selected session directly.
+  - Manual browser verification is still pending because no browser/MCP tool is available in this environment.
 ---
 
