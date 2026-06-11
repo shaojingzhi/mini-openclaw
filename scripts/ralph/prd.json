@@ -385,8 +385,8 @@
         "Verify in browser using dev-browser skill"
       ],
       "priority": 23,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Added a Monaco-based inspector in frontend/src/app/page.tsx with a dynamic ssr:false editor wrapper at frontend/src/components/monaco-markdown-editor.tsx. The panel can switch between backend/memory/MEMORY.md, backend/workspace/AGENTS.md, and backend/skills/get_weather/SKILL.md, loads via GET /api/files, saves via POST /api/files, shows Sonner success/error toasts, and supports Cmd/Ctrl+S. Verified with npm run typecheck --prefix frontend and npm run build --prefix frontend."
     }
   ]
 }

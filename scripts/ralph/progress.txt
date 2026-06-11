@@ -499,3 +499,18 @@ Started: 2026年 6月 4日 星期四 00时57分56秒 CST
   - Manual browser verification used the local dev server plus HTTP response only; a real interactive browser pass is still pending because no browser/MCP tool is available here.
 ---
 
+## 2026-06-11 - US-023
+- Built the Inspector panel with a Monaco markdown editor, file picker, load/save integration, and toast feedback.
+- Files changed:
+  - frontend/src/app/page.tsx
+  - frontend/src/components/monaco-markdown-editor.tsx
+  - frontend/package.json
+  - frontend/package-lock.json
+- Verification:
+  - npm run typecheck --prefix /Users/alice/LLM-learning/mini-openclaw/frontend
+  - npm run build --prefix /Users/alice/LLM-learning/mini-openclaw/frontend
+- **Learnings for future iterations:**
+  - Monaco should be wrapped in a client-only dynamic import (`ssr: false`) to avoid Next.js server rendering issues.
+  - File-editor save UX is simple and reliable when the page owns the selected path, current buffer, and toast lifecycle directly.
+  - Cmd/Ctrl+S can be supported both with a global keydown listener and Monaco command binding for a consistent editor feel.
+---
