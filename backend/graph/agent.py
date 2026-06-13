@@ -43,18 +43,31 @@ DEFAULT_MODEL = "gpt-4o-mini"
 CORE_TOOLS = [terminal, python_repl, fetch_url, read_file, search_knowledge_base]
 
 
-def _build_model() -> BaseChatModel:
-    """Instantiate the OpenAI-API-compatible chat model from environment vars."""
-    api_key = os.environ.get("OPENAI_API_KEY", "EMPTY")
-    base_url = os.environ.get("OPENAI_BASE_URL")
-    model = os.environ.get("OPENAI_MODEL", DEFAULT_MODEL)
-    kwargs: dict[str, Any] = {"model": model, "api_key": api_key}
-    if base_url:
-        kwargs["base_url"] = base_url
+def _build_model(
+    api_key: str | None = None,
+    base_url: str | None = None,
+    model: str | None = None,
+) -> BaseChatModel:
+    """Instantiate the OpenAI-compatible chat model from env vars or overrides."""
+    resolved_api_key = api_key or os.environ.get("OPENAI_API_KEY", "EMPTY")
+    resolved_base_url = base_url or os.environ.get("OPENAI_BASE_URL")
+    resolved_model = model or os.environ.get("OPENAI_MODEL", DEFAULT_MODEL)
+    kwargs: dict[str, Any] = {
+        "model": resolved_model,
+        "api_key": resolved_api_key,
+    }
+    if resolved_base_url:
+        kwargs["base_url"] = resolved_base_url
     return ChatOpenAI(**kwargs)
 
 
-def build_agent(model: BaseChatModel | None = None) -> Any:
+def build_agent(
+    model: BaseChatModel | None = None,
+    *,
+    api_key: str | None = None,
+    base_url: str | None = None,
+    model_name: str | None = None,
+) -> Any:
     """Build the Mini-OpenClaw Agent.
 
     Parameters
@@ -69,7 +82,11 @@ def build_agent(model: BaseChatModel | None = None) -> Any:
     -------
     The compiled LangGraph state graph produced by ``create_agent``.
     """
-    chat_model = model if model is not None else _build_model()
+    chat_model = model if model is not None else _build_model(
+        api_key=api_key,
+        base_url=base_url,
+        model=model_name,
+    )
     system_prompt = build_system_prompt()
     return create_agent(
         model=chat_model,

@@ -9,6 +9,7 @@ import {
   History,
   Loader2,
   PanelRightOpen,
+  RotateCcw,
   Save,
   Sparkles,
   WandSparkles,
@@ -17,7 +18,7 @@ import { Toaster, toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { getFile, listSessions, saveFile, streamChat, type ChatEvent, type SessionSummary } from "@/lib/api";
+import { getFile, listSessions, saveFile, streamChat, type ChatEvent, type ModelSettings, type SessionSummary } from "@/lib/api";
 
 const MonacoEditor = dynamic(() => import("@/components/monaco-markdown-editor").then((module) => module.MonacoMarkdownEditor), {
   ssr: false,
@@ -50,6 +51,13 @@ const inspectorFiles: InspectorFile[] = [
   { label: "Agents", path: "backend/workspace/AGENTS.md" },
   { label: "Weather Skill", path: "backend/skills/get_weather/SKILL.md" },
 ];
+
+const MODEL_SETTINGS_STORAGE_KEY = "mini-openclaw-model-settings";
+const defaultModelSettings: ModelSettings = {
+  apiKey: "",
+  baseUrl: "https://api.codexzh.com/v1",
+  model: "gpt-5.4",
+};
 
 const starterMessages: ChatMessage[] = [
   {
@@ -209,7 +217,38 @@ export default function Home() {
   const [isInspectorLoading, setIsInspectorLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [inspectorError, setInspectorError] = useState<string | null>(null);
+  const [modelSettings, setModelSettings] = useState<ModelSettings>(defaultModelSettings);
   const initialInspectorLoad = useRef(false);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const raw = window.localStorage.getItem(MODEL_SETTINGS_STORAGE_KEY);
+    if (!raw) {
+      return;
+    }
+
+    try {
+      const parsed = JSON.parse(raw) as Partial<ModelSettings>;
+      setModelSettings({
+        apiKey: typeof parsed.apiKey === "string" ? parsed.apiKey : defaultModelSettings.apiKey,
+        baseUrl: typeof parsed.baseUrl === "string" && parsed.baseUrl.trim() ? parsed.baseUrl : defaultModelSettings.baseUrl,
+        model: typeof parsed.model === "string" && parsed.model.trim() ? parsed.model : defaultModelSettings.model,
+      });
+    } catch {
+      window.localStorage.removeItem(MODEL_SETTINGS_STORAGE_KEY);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.localStorage.setItem(MODEL_SETTINGS_STORAGE_KEY, JSON.stringify(modelSettings));
+  }, [modelSettings]);
 
   useEffect(() => {
     let mounted = true;
@@ -318,7 +357,7 @@ export default function Home() {
     }));
 
     try {
-      for await (const chatEvent of streamChat(trimmed, activeSessionId)) {
+      for await (const chatEvent of streamChat(trimmed, activeSessionId, modelSettings)) {
         setMessages((current) => {
           const nextMessages = [...(current[activeSessionId] ?? [])];
           const index = nextMessages.findIndex((message) => message.id === assistantId && message.role === "assistant");
@@ -391,6 +430,18 @@ export default function Home() {
     } finally {
       setIsSaving(false);
     }
+  }
+
+  function handleModelSettingChange(field: keyof ModelSettings, value: string) {
+    setModelSettings((current) => ({
+      ...current,
+      [field]: value,
+    }));
+  }
+
+  function handleResetModelSettings() {
+    setModelSettings(defaultModelSettings);
+    toast.success("Restored default model settings");
   }
 
   return (
@@ -542,7 +593,7 @@ export default function Home() {
                 </div>
               </section>
 
-              <section className="hidden min-h-[640px] flex-col rounded-[26px] border border-white/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.84),rgba(247,248,252,0.80))] p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.7)] xl:flex">
+              <section className="flex min-h-[640px] flex-col rounded-[26px] border border-white/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.84),rgba(247,248,252,0.80))] p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.7)]">
                 <div className="flex items-start justify-between gap-4 border-b border-slate-200/80 pb-5">
                   <div>
                     <p className="text-xs font-semibold uppercase tracking-[0.32em] text-primary/60">Inspector</p>
@@ -550,6 +601,50 @@ export default function Home() {
                   </div>
                   <div className="rounded-2xl border border-slate-200/80 bg-white/85 p-3 text-slate-500">
                     <PanelRightOpen className="h-5 w-5" />
+                  </div>
+                </div>
+
+                <div className="mt-6 rounded-[24px] border border-slate-200/80 bg-white/90 p-4 shadow-sm">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-semibold text-slate-900">Model Settings</p>
+                      <p className="mt-1 text-xs leading-5 text-slate-500">Sent with each chat request. Leave `API Key` empty to use the backend default.</p>
+                    </div>
+                    <Button className="h-9 rounded-2xl px-3" onClick={handleResetModelSettings} type="button" variant="outline">
+                      <RotateCcw className="mr-2 h-4 w-4" />
+                      Reset
+                    </Button>
+                  </div>
+
+                  <div className="mt-4 space-y-3">
+                    <div className="space-y-2">
+                      <label className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">Base URL</label>
+                      <Input
+                        className="h-11 rounded-2xl border-slate-200 bg-slate-50/80"
+                        onChange={(event) => handleModelSettingChange("baseUrl", event.target.value)}
+                        placeholder="https://api.codexzh.com/v1"
+                        value={modelSettings.baseUrl}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">Model</label>
+                      <Input
+                        className="h-11 rounded-2xl border-slate-200 bg-slate-50/80"
+                        onChange={(event) => handleModelSettingChange("model", event.target.value)}
+                        placeholder="gpt-5.4"
+                        value={modelSettings.model}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">API Key</label>
+                      <Input
+                        className="h-11 rounded-2xl border-slate-200 bg-slate-50/80"
+                        onChange={(event) => handleModelSettingChange("apiKey", event.target.value)}
+                        placeholder="Leave empty to use backend default"
+                        type="password"
+                        value={modelSettings.apiKey}
+                      />
+                    </div>
                   </div>
                 </div>
 

@@ -9,17 +9,45 @@ import asyncio
 import json
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
+import os
 from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sse_starlette import EventSourceResponse
+from dotenv import load_dotenv
 
 from backend.graph.agent import build_agent
 from backend import sessions_store
 
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
+
 app: FastAPI = FastAPI(title="Mini-OpenClaw Backend")
+
+DEFAULT_CORS_ORIGINS: tuple[str, ...] = (
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:3004",
+    "http://127.0.0.1:3004",
+)
+
+
+def _cors_origins() -> list[str]:
+    raw_origins = os.getenv("MINI_OPENCLAW_CORS_ORIGINS")
+    if not raw_origins:
+        return list(DEFAULT_CORS_ORIGINS)
+    return [origin.strip() for origin in raw_origins.split(",") if origin.strip()]
+
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins(),
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 PROJECT_ROOT: Path = Path(__file__).resolve().parents[1]
 ALLOWED_FILE_ROOTS: tuple[Path, ...] = (
@@ -33,6 +61,9 @@ class ChatRequest(BaseModel):
     message: str
     session_id: str
     stream: bool = True
+    api_key: str | None = None
+    base_url: str | None = None
+    model: str | None = None
 
 
 class FileWriteRequest(BaseModel):
@@ -94,6 +125,10 @@ def _extract_final_reply(result: Any) -> str:
     return _coerce_text(getattr(result, "content", ""))
 
 
+def _agent_error_message(error: Exception) -> str:
+    return str(error).strip() or error.__class__.__name__
+
+
 async def _invoke_agent(agent: Any, payload: dict[str, Any]) -> Any:
     if hasattr(agent, "ainvoke"):
         return await agent.ainvoke(payload)
@@ -151,16 +186,37 @@ async def _chat_sse(request: ChatRequest) -> AsyncIterator[dict[str, str]]:
         request.session_id,
         {"role": "user", "content": request.message},
     )
-    agent = build_agent()
+    agent = build_agent(
+        api_key=request.api_key,
+        base_url=request.base_url,
+        model_name=request.model,
+    )
     payload = {"messages": sessions_store.load_session(request.session_id)}
     final_text = ""
 
-    async for event_type, event_payload in _stream_agent_events(agent, payload):
-        if event_type == "final":
-            final_text = _coerce_text(event_payload.get("content", ""))
+    try:
+        async for event_type, event_payload in _stream_agent_events(agent, payload):
+            if event_type == "final":
+                final_text = _coerce_text(event_payload.get("content", ""))
+            yield {
+                "event": event_type,
+                "data": json.dumps(event_payload, ensure_ascii=False),
+            }
+    except Exception as exc:
+        final_text = "The assistant could not complete the request."
         yield {
-            "event": event_type,
-            "data": json.dumps(event_payload, ensure_ascii=False),
+            "event": "tool_result",
+            "data": json.dumps(
+                {
+                    "name": "agent_error",
+                    "content": _agent_error_message(exc),
+                },
+                ensure_ascii=False,
+            ),
+        }
+        yield {
+            "event": "final",
+            "data": json.dumps({"content": final_text}, ensure_ascii=False),
         }
 
     sessions_store.append_message(
@@ -183,12 +239,22 @@ async def chat(request: ChatRequest) -> Any:
         request.session_id,
         {"role": "user", "content": request.message},
     )
-    agent = build_agent()
-    result = await _invoke_agent(
-        agent,
-        {"messages": sessions_store.load_session(request.session_id)},
+    agent = build_agent(
+        api_key=request.api_key,
+        base_url=request.base_url,
+        model_name=request.model,
     )
-    final_text = _extract_final_reply(result)
+    try:
+        result = await _invoke_agent(
+            agent,
+            {"messages": sessions_store.load_session(request.session_id)},
+        )
+        final_text = _extract_final_reply(result)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"agent execution failed: {_agent_error_message(exc)}",
+        ) from exc
     sessions_store.append_message(
         request.session_id,
         {"role": "assistant", "content": final_text},

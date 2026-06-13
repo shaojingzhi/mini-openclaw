@@ -1,5 +1,11 @@
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8002";
 
+export type ModelSettings = {
+  apiKey: string;
+  baseUrl: string;
+  model: string;
+};
+
 export type ChatEventType = "thought" | "tool_call" | "tool_result" | "final";
 
 export type ThoughtEvent = {
@@ -115,6 +121,7 @@ function parseSseBlock(block: string): ChatEvent | null {
 export async function* streamChat(
   message: string,
   sessionId: string,
+  settings?: Partial<ModelSettings>,
 ): AsyncGenerator<ChatEvent, void, undefined> {
   const response = assertResponseOk(
     await fetch(buildApiUrl("/api/chat"), {
@@ -126,6 +133,9 @@ export async function* streamChat(
         message,
         session_id: sessionId,
         stream: true,
+        api_key: settings?.apiKey?.trim() || undefined,
+        base_url: settings?.baseUrl?.trim() || undefined,
+        model: settings?.model?.trim() || undefined,
       }),
     }),
     "streamChat",
