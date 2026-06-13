@@ -30,3 +30,4 @@ out/
 *.tsbuildinfo
 
 .env
+.runtime/
