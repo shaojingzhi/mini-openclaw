@@ -71,6 +71,11 @@ class FileWriteRequest(BaseModel):
     content: str
 
 
+class SessionMessage(BaseModel):
+    role: str
+    content: str
+
+
 def _resolve_allowed_file_path(raw_path: str) -> Path:
     candidate = (PROJECT_ROOT / raw_path).resolve()
     for root in ALLOWED_FILE_ROOTS:
@@ -290,6 +295,12 @@ def list_sessions() -> dict[str, list[dict[str, Any]]]:
         if path.is_file()
     ]
     return {"sessions": sessions}
+
+
+@app.get("/api/sessions/{session_id}")
+def get_session(session_id: str) -> dict[str, Any]:
+    messages = sessions_store.load_session(session_id)
+    return {"session_id": session_id, "messages": messages}
 
 
 if __name__ == "__main__":

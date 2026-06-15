@@ -18,7 +18,7 @@ import { Toaster, toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { getFile, listSessions, saveFile, streamChat, type ChatEvent, type ModelSettings, type SessionSummary } from "@/lib/api";
+import { getFile, getSession, listSessions, saveFile, streamChat, type ChatEvent, type ModelSettings, type SessionSummary } from "@/lib/api";
 
 const MonacoEditor = dynamic(() => import("@/components/monaco-markdown-editor").then((module) => module.MonacoMarkdownEditor), {
   ssr: false,
@@ -39,6 +39,8 @@ type TraceItem =
 type ChatMessage =
   | { id: string; role: "user"; content: string }
   | { id: string; role: "assistant"; content: string; trace: TraceItem[] };
+
+type SessionStatus = "idle" | "loading" | "ready" | "error";
 
 const navItems: Array<{ id: NavId; label: string; icon: typeof Bot }> = [
   { id: "chat", label: "Chat", icon: Bot },
@@ -151,6 +153,27 @@ function appendEvent(message: Extract<ChatMessage, { role: "assistant" }>, event
   };
 }
 
+function toChatMessages(items: Array<{ role: string; content: string }>): ChatMessage[] {
+  return items
+    .filter((item) => item.role === "user" || item.role === "assistant")
+    .map((item, index) => {
+      if (item.role === "user") {
+        return {
+          id: `session-user-${index}`,
+          role: "user",
+          content: item.content,
+        } satisfies ChatMessage;
+      }
+
+      return {
+        id: `session-assistant-${index}`,
+        role: "assistant",
+        content: item.content,
+        trace: [],
+      } satisfies ChatMessage;
+    });
+}
+
 function TraceBlock({ messageId, trace }: { messageId: string; trace: TraceItem[] }) {
   if (trace.length === 0) {
     return null;
@@ -208,6 +231,7 @@ export default function Home() {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string>("");
   const [messages, setMessages] = useState<Record<string, ChatMessage[]>>({});
+  const [sessionStatus, setSessionStatus] = useState<Record<string, SessionStatus>>({});
   const [draft, setDraft] = useState("Ask the agent to inspect a skill, fetch a file, or explain the current session.");
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamError, setStreamError] = useState<string | null>(null);
@@ -219,6 +243,8 @@ export default function Home() {
   const [inspectorError, setInspectorError] = useState<string | null>(null);
   const [modelSettings, setModelSettings] = useState<ModelSettings>(defaultModelSettings);
   const initialInspectorLoad = useRef(false);
+  const stageHeadingRef = useRef<HTMLHeadingElement | null>(null);
+  const composerRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -315,17 +341,96 @@ export default function Home() {
     };
   }, [selectedInspectorPath]);
 
+  useEffect(() => {
+    if (activeNav === "memory") {
+      setSelectedInspectorPath("backend/memory/MEMORY.md");
+      return;
+    }
+
+    if (activeNav === "skills") {
+      setSelectedInspectorPath("backend/skills/get_weather/SKILL.md");
+      return;
+    }
+
+    setSelectedInspectorPath((current) => current || inspectorFiles[0]?.path || "");
+  }, [activeNav]);
+
+  useEffect(() => {
+    if (!activeSessionId || messages[activeSessionId]) {
+      return;
+    }
+
+    let mounted = true;
+    setSessionStatus((current) => ({ ...current, [activeSessionId]: "loading" }));
+
+    void getSession(activeSessionId)
+      .then((payload) => {
+        if (!mounted) {
+          return;
+        }
+
+        setMessages((current) => ({
+          ...current,
+          [activeSessionId]: payload.length > 0 ? toChatMessages(payload) : starterMessages,
+        }));
+        setSessionStatus((current) => ({ ...current, [activeSessionId]: "ready" }));
+      })
+      .catch((error) => {
+        if (!mounted) {
+          return;
+        }
+
+        const message = error instanceof Error ? error.message : "Failed to load session";
+        setMessages((current) => ({
+          ...current,
+          [activeSessionId]: starterMessages,
+        }));
+        setSessionStatus((current) => ({ ...current, [activeSessionId]: "error" }));
+        toast.error("Failed to load session", { description: message });
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, [activeSessionId, messages]);
+
   const activeSession = sessions.find((session) => session.name === activeSessionId) ?? null;
   const activeNavLabel = navItems.find((item) => item.id === activeNav)?.label ?? "Chat";
   const selectedInspectorLabel = inspectorFiles.find((item) => item.path === selectedInspectorPath)?.label ?? selectedInspectorPath;
+  const currentSessionStatus = activeSessionId ? (sessionStatus[activeSessionId] ?? "idle") : "idle";
   const sessionMessages = useMemo(() => {
     if (!activeSessionId) {
       return starterMessages;
     }
 
-    return messages[activeSessionId] ?? starterMessages;
+    return messages[activeSessionId] ?? [];
   }, [activeSessionId, messages]);
   const isDirty = initialInspectorLoad.current && loadedFilePath === selectedInspectorPath && editorValue !== "";
+
+  const activeViewDescription = useMemo(() => {
+    if (activeNav === "memory") {
+      return "Review and edit long-term memory files without leaving the workspace.";
+    }
+
+    if (activeNav === "skills") {
+      return "Inspect the skill protocol and local skill definitions from the right-hand panel.";
+    }
+
+    return "The stage now streams agent events live and tucks thought traces behind a collapsible block on every assistant reply.";
+  }, [activeNav]);
+
+  function focusChatWorkspace() {
+    stageHeadingRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    window.setTimeout(() => {
+      composerRef.current?.focus();
+    }, 200);
+  }
+
+  function handleSessionSelect(sessionId: string) {
+    setActiveSessionId(sessionId);
+    setActiveNav("chat");
+    focusChatWorkspace();
+  }
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -447,9 +552,9 @@ export default function Home() {
   return (
     <>
       <Toaster position="top-right" richColors />
-      <main className="min-h-screen bg-[radial-gradient(circle_at_top_left,_rgba(29,78,216,0.12),_transparent_34%),radial-gradient(circle_at_bottom_right,_rgba(245,158,11,0.12),_transparent_28%),#fafafa] px-4 pb-4 pt-24 text-foreground sm:px-6 sm:pt-28 lg:px-8">
-        <div className="fixed inset-x-4 top-4 z-20 sm:inset-x-6 lg:inset-x-8">
-          <div className="mx-auto flex h-16 w-full max-w-[1600px] items-center rounded-[24px] border border-white/80 bg-white/65 px-5 shadow-[0_18px_60px_rgba(15,23,42,0.10)] backdrop-blur-xl sm:px-6">
+      <main className="min-h-screen bg-[radial-gradient(circle_at_top_left,_rgba(29,78,216,0.12),_transparent_34%),radial-gradient(circle_at_bottom_right,_rgba(245,158,11,0.12),_transparent_28%),#fafafa] p-3 text-foreground sm:p-4">
+        <div className="sticky top-3 z-20 sm:top-4">
+          <div className="flex h-16 w-full items-center rounded-[24px] border border-white/80 bg-white/75 px-5 shadow-[0_18px_60px_rgba(15,23,42,0.10)] backdrop-blur-xl sm:px-6">
             <div className="flex items-center gap-3">
               <span className="rounded-full border border-primary/15 bg-primary/[0.08] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.3em] text-primary/70">
                 IDE
@@ -459,9 +564,9 @@ export default function Home() {
           </div>
         </div>
 
-        <div className="mx-auto flex min-h-[calc(100vh-7rem)] w-full max-w-[1600px] flex-col rounded-[30px] border border-white/80 bg-white/55 p-3 shadow-[0_28px_120px_rgba(15,23,42,0.10)] backdrop-blur-xl sm:min-h-[calc(100vh-8rem)] sm:p-4">
-          <section className="grid min-h-[calc(100vh-9rem)] gap-3 sm:min-h-[calc(100vh-10rem)] lg:grid-cols-[240px_minmax(0,1fr)] xl:grid-cols-[240px_minmax(0,1fr)_420px]">
-            <aside className="rounded-[26px] border border-white/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.86),rgba(248,250,252,0.72))] p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.7)]">
+        <div className="mt-3 flex min-h-[calc(100vh-5.75rem)] w-full flex-col rounded-[30px] border border-white/80 bg-white/55 p-3 shadow-[0_28px_120px_rgba(15,23,42,0.10)] backdrop-blur-xl sm:mt-4 sm:min-h-[calc(100vh-6rem)] sm:p-4">
+          <section className="grid min-h-0 flex-1 gap-3 lg:grid-cols-[240px_minmax(0,1fr)] 2xl:grid-cols-[240px_minmax(0,1fr)_420px]">
+            <aside className="rounded-[26px] border border-white/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.86),rgba(248,250,252,0.72))] p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.7)] lg:sticky lg:top-[5.75rem] lg:max-h-[calc(100vh-7rem)] lg:overflow-y-auto">
               <div className="space-y-5">
                 <div>
                   <p className="text-xs font-semibold uppercase tracking-[0.32em] text-primary/60">Workspace</p>
@@ -498,7 +603,7 @@ export default function Home() {
                     <p className="text-xs font-semibold uppercase tracking-[0.26em] text-slate-500">Sessions</p>
                     <span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-medium text-slate-500">{sessions.length}</span>
                   </div>
-                  <div className="mt-4 max-h-[420px] space-y-2 overflow-y-auto pr-1">
+                  <div className="mt-4 space-y-2 pr-1 lg:max-h-[calc(100vh-21rem)] lg:overflow-y-auto">
                     {sessions.length === 0 ? (
                       <div className="rounded-2xl border border-dashed border-slate-200 px-4 py-3 text-sm text-slate-500">
                         <p>No sessions yet.</p>
@@ -517,7 +622,7 @@ export default function Home() {
                                 ? "border-primary/20 bg-[linear-gradient(135deg,rgba(37,99,235,0.10),rgba(255,255,255,0.92))] shadow-sm"
                                 : "border-transparent bg-transparent hover:border-slate-200 hover:bg-white/70",
                             ].join(" ")}
-                            onClick={() => setActiveSessionId(session.name)}
+                            onClick={() => handleSessionSelect(session.name)}
                             type="button"
                           >
                             <div className="flex items-center justify-between gap-3">
@@ -534,66 +639,119 @@ export default function Home() {
               </div>
             </aside>
 
-            <div className="grid min-h-0 grid-cols-1 gap-3 xl:grid-cols-[minmax(0,1fr)_420px]">
-              <section className="flex min-h-[640px] flex-col rounded-[26px] border border-white/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.86),rgba(244,247,251,0.78))] p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.7)] sm:p-6">
+            <div className="grid min-h-0 grid-cols-1 gap-3 2xl:grid-cols-[minmax(0,1fr)_420px]">
+              <section className="flex min-h-[60vh] min-w-0 flex-col rounded-[26px] border border-white/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.86),rgba(244,247,251,0.78))] p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.7)] sm:p-6 lg:min-h-0 lg:h-[calc(100vh-7rem)]">
                 <div className="flex flex-col gap-4 border-b border-slate-200/80 pb-5 sm:flex-row sm:items-end sm:justify-between">
                   <div className="space-y-2">
                     <p className="text-xs font-semibold uppercase tracking-[0.32em] text-primary/60">Stage</p>
-                    <h2 className="text-3xl font-semibold tracking-tight text-slate-950">{activeNavLabel} workspace</h2>
-                    <p className="max-w-2xl text-sm leading-6 text-slate-600">The stage now streams agent events live and tucks thought traces behind a collapsible block on every assistant reply.</p>
+                    <h2 className="text-3xl font-semibold tracking-tight text-slate-950" ref={stageHeadingRef}>{activeNavLabel} workspace</h2>
+                    <p className="max-w-2xl text-sm leading-6 text-slate-600">{activeViewDescription}</p>
                   </div>
-                  <div className="flex items-center gap-3 rounded-2xl border border-slate-200/80 bg-white/90 px-3 py-3 shadow-sm">
+                  <div className="flex items-center gap-3 rounded-2xl border border-slate-200/80 bg-white/90 px-3 py-3 shadow-sm sm:self-start">
                     {isStreaming ? <Loader2 className="h-4 w-4 animate-spin text-primary" /> : <WandSparkles className="h-4 w-4 text-primary" />}
                     <span className="text-sm font-medium text-slate-700">Session {activeSession?.name ?? activeSessionId ?? "draft"}</span>
                   </div>
                 </div>
 
-                <div className="flex flex-1 flex-col justify-between gap-6 pt-6">
-                  <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
-                    {sessionMessages.map((message) => {
-                      if (message.role === "user") {
-                        return (
-                          <article key={message.id} className="max-w-[82%] rounded-[24px] border border-slate-200/80 bg-white/90 p-5 shadow-sm">
-                            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">User</p>
-                            <p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-slate-700">{message.content}</p>
-                          </article>
-                        );
-                      }
-
-                      return (
-                        <article key={message.id} className="ml-auto max-w-[88%] rounded-[24px] border border-primary/15 bg-[linear-gradient(135deg,rgba(255,255,255,0.94),rgba(219,234,254,0.92))] p-5 shadow-[0_20px_50px_rgba(37,99,235,0.10)]">
-                          <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.22em] text-primary/70">
-                            <Bot className="h-4 w-4" />
-                            Assistant
-                          </div>
-                          <p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-slate-700">
-                            {message.content || (isStreaming ? "Streaming response..." : "Waiting for assistant output.")}
+                <div className="flex min-h-0 flex-1 flex-col justify-between gap-6 pt-6">
+                  <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+                    {activeNav === "chat" ? (
+                      <div className="space-y-4">
+                        <div className="rounded-[24px] border border-primary/15 bg-[linear-gradient(135deg,rgba(239,246,255,0.92),rgba(255,255,255,0.96))] p-5 shadow-sm">
+                          <p className="text-xs font-semibold uppercase tracking-[0.22em] text-primary/70">Conversation History</p>
+                          <p className="mt-3 text-sm leading-7 text-slate-700">
+                            Current session: <span className="font-semibold text-slate-950">{activeSession?.name ?? activeSessionId ?? "draft session"}</span>.
+                            Select a session on the left and continue the conversation below.
                           </p>
-                          <TraceBlock messageId={message.id} trace={message.trace} />
-                        </article>
-                      );
-                    })}
+                        </div>
+                        {currentSessionStatus === "loading" ? (
+                          <div className="rounded-[24px] border border-dashed border-slate-200 bg-white/80 p-6 text-sm text-slate-500">
+                            Loading session history...
+                          </div>
+                        ) : null}
+                        {currentSessionStatus !== "loading" && sessionMessages.length === 0 ? (
+                          <div className="rounded-[24px] border border-dashed border-slate-200 bg-white/80 p-6 text-sm text-slate-500">
+                            No messages in this session yet. Send the first prompt to get started.
+                          </div>
+                        ) : null}
+                        {sessionMessages.map((message) => {
+                          if (message.role === "user") {
+                            return (
+                              <article key={message.id} className="max-w-[90%] rounded-[24px] border border-slate-200/80 bg-white/90 p-5 shadow-sm xl:max-w-[82%]">
+                                <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">User</p>
+                                <p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-slate-700">{message.content}</p>
+                              </article>
+                            );
+                          }
+
+                          return (
+                            <article key={message.id} className="ml-auto max-w-[94%] rounded-[24px] border border-primary/15 bg-[linear-gradient(135deg,rgba(255,255,255,0.94),rgba(219,234,254,0.92))] p-5 shadow-[0_20px_50px_rgba(37,99,235,0.10)] xl:max-w-[88%]">
+                              <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.22em] text-primary/70">
+                                <Bot className="h-4 w-4" />
+                                Assistant
+                              </div>
+                              <p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-slate-700">
+                                {message.content || (isStreaming ? "Streaming response..." : "Waiting for assistant output.")}
+                              </p>
+                              <TraceBlock messageId={message.id} trace={message.trace} />
+                            </article>
+                          );
+                        })}
+                      </div>
+                    ) : null}
+
+                    {activeNav === "memory" ? (
+                      <div className="space-y-4">
+                        <div className="rounded-[24px] border border-slate-200/80 bg-white/90 p-5 shadow-sm">
+                          <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">Memory View</p>
+                          <p className="mt-3 text-sm leading-7 text-slate-700">
+                            Use the right-hand inspector to review and edit `backend/memory/MEMORY.md`. This view is for long-term notes and user preferences rather than live chat.
+                          </p>
+                        </div>
+                        <div className="rounded-[24px] border border-dashed border-slate-200 bg-white/70 p-5 text-sm text-slate-500">
+                          Selected file: {selectedInspectorPath}
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {activeNav === "skills" ? (
+                      <div className="space-y-4">
+                        <div className="rounded-[24px] border border-slate-200/80 bg-white/90 p-5 shadow-sm">
+                          <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">Skills View</p>
+                          <p className="mt-3 text-sm leading-7 text-slate-700">
+                            Use the right-hand inspector to switch between the skill protocol and specific skill files. This pane is meant for browsing how the agent should behave, not for chatting.
+                          </p>
+                        </div>
+                        <div className="rounded-[24px] border border-dashed border-slate-200 bg-white/70 p-5 text-sm text-slate-500">
+                          Current inspector file: {selectedInspectorPath}
+                        </div>
+                      </div>
+                    ) : null}
                   </div>
 
                   <div className="rounded-[26px] border border-slate-200/80 bg-white/88 p-4 shadow-sm">
-                    <form className="flex flex-col gap-3 lg:flex-row" onSubmit={handleSubmit}>
+                    <form className="flex flex-col gap-3 xl:flex-row" onSubmit={handleSubmit}>
                       <Input
                         aria-label="Chat composer"
-                        className="h-14 rounded-2xl border-slate-200 bg-slate-50/80 px-4 text-base"
+                        className="h-14 min-w-0 rounded-2xl border-slate-200 bg-slate-50/80 px-4 text-base"
+                        disabled={activeNav !== "chat"}
+                        ref={composerRef}
                         onChange={(event) => setDraft(event.target.value)}
-                        placeholder="Ask the agent to inspect a skill, fetch a file, or explain the current session."
+                        placeholder={activeNav === "chat" ? "Ask the agent to inspect a skill, fetch a file, or explain the current session." : "Switch back to Chat to send messages."}
                         value={draft}
                       />
-                      <Button className="h-14 rounded-2xl px-6 text-base lg:min-w-36" disabled={isStreaming || !draft.trim()} type="submit">
+                      <Button className="h-14 rounded-2xl px-6 text-base xl:min-w-36" disabled={activeNav !== "chat" || isStreaming || !draft.trim()} type="submit">
                         {isStreaming ? "Streaming..." : "Send"}
                       </Button>
                     </form>
+                    {activeNav === "chat" ? <p className="mt-3 text-sm text-slate-500">Continue this conversation from here.</p> : null}
+                    {activeNav !== "chat" ? <p className="mt-3 text-sm text-slate-500">This composer is only active in Chat view.</p> : null}
                     {streamError ? <p className="mt-3 text-sm text-rose-600">{streamError}</p> : null}
                   </div>
                 </div>
               </section>
 
-              <section className="flex min-h-[640px] flex-col rounded-[26px] border border-white/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.84),rgba(247,248,252,0.80))] p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.7)]">
+              <section className="flex min-h-[60vh] min-w-0 flex-col rounded-[26px] border border-white/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.84),rgba(247,248,252,0.80))] p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.7)] lg:min-h-0 lg:h-[calc(100vh-7rem)] 2xl:sticky 2xl:top-[5.75rem] 2xl:max-h-[calc(100vh-7rem)]">
                 <div className="flex items-start justify-between gap-4 border-b border-slate-200/80 pb-5">
                   <div>
                     <p className="text-xs font-semibold uppercase tracking-[0.32em] text-primary/60">Inspector</p>
@@ -605,7 +763,7 @@ export default function Home() {
                 </div>
 
                 <div className="mt-6 rounded-[24px] border border-slate-200/80 bg-white/90 p-4 shadow-sm">
-                  <div className="flex items-start justify-between gap-3">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                     <div>
                       <p className="text-sm font-semibold text-slate-900">Model Settings</p>
                       <p className="mt-1 text-xs leading-5 text-slate-500">Sent with each chat request. Leave `API Key` empty to use the backend default.</p>
@@ -656,9 +814,9 @@ export default function Home() {
                   </div>
                 </div>
 
-                <div className="mt-4 flex items-center gap-3">
+                <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center">
                   <select
-                    className="h-11 flex-1 rounded-2xl border border-slate-200/80 bg-white/90 px-4 text-sm text-slate-700 shadow-sm outline-none transition focus:border-primary/30"
+                    className="h-11 min-w-0 flex-1 rounded-2xl border border-slate-200/80 bg-white/90 px-4 text-sm text-slate-700 shadow-sm outline-none transition focus:border-primary/30"
                     onChange={(event) => setSelectedInspectorPath(event.target.value)}
                     value={selectedInspectorPath}
                   >
@@ -668,13 +826,13 @@ export default function Home() {
                       </option>
                     ))}
                   </select>
-                  <Button className="h-11 rounded-2xl px-4" disabled={isInspectorLoading || isSaving} onClick={handleSaveInspector} type="button">
+                  <Button className="h-11 rounded-2xl px-4 sm:shrink-0" disabled={isInspectorLoading || isSaving} onClick={handleSaveInspector} type="button">
                     {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
                     Save
                   </Button>
                 </div>
 
-                <div className="mt-4 flex-1 overflow-hidden rounded-[24px] border border-slate-200 bg-white/90 shadow-sm">
+                <div className="mt-4 min-h-[320px] flex-1 overflow-hidden rounded-[24px] border border-slate-200 bg-white/90 shadow-sm">
                   {isInspectorLoading ? (
                     <div className="flex h-full items-center justify-center gap-3 text-sm text-slate-500">
                       <Loader2 className="h-4 w-4 animate-spin text-primary" />

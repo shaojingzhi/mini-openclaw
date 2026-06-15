@@ -38,6 +38,11 @@ export type SessionSummary = {
   message_count: number;
 };
 
+export type SessionMessage = {
+  role: string;
+  content: string;
+};
+
 export type FilePayload = {
   path: string;
   content: string;
@@ -212,4 +217,16 @@ export async function listSessions(): Promise<SessionSummary[]> {
 
   const body = (await response.json()) as { sessions: SessionSummary[] };
   return body.sessions;
+}
+
+export async function getSession(sessionId: string): Promise<SessionMessage[]> {
+  const response = assertResponseOk(
+    await fetch(buildApiUrl(`/api/sessions/${encodeURIComponent(sessionId)}`), {
+      cache: "no-store",
+    }),
+    "getSession",
+  );
+
+  const body = (await response.json()) as { session_id: string; messages: SessionMessage[] };
+  return body.messages;
 }

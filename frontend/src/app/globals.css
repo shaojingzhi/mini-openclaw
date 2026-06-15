@@ -33,6 +33,12 @@ html {
   background: #fafafa;
 }
 
+html,
+body,
+body > div:first-child {
+  min-height: 100%;
+}
+
 body {
   @apply bg-background text-foreground antialiased;
   min-height: 100vh;
