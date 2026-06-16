@@ -450,8 +450,8 @@
         "Tests pass"
       ],
       "priority": 4,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Added GET /api/traces and GET /api/traces/{trace_id} backed by local JSON files in backend/data/traces. The summary endpoint returns trace_id, session_id, latency_ms, final_status, and created_at; the detail endpoint returns the full persisted trace payload and 404s cleanly for missing traces. Added integration coverage for list, detail, and missing-trace cases."
     },
     {
       "id": "US-105",

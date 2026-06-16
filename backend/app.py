@@ -332,6 +332,38 @@ def get_session(session_id: str) -> dict[str, Any]:
     return {"session_id": session_id, "messages": messages}
 
 
+@app.get("/api/traces")
+def list_traces() -> dict[str, list[dict[str, Any]]]:
+    if not traces_store.TRACES_DIR.exists():
+        return {"traces": []}
+
+    traces = []
+    for path in sorted(traces_store.TRACES_DIR.glob("*.json"), reverse=True):
+        if not path.is_file():
+            continue
+        trace = traces_store.load_trace(path.stem)
+        if not trace:
+            continue
+        traces.append(
+            {
+                "trace_id": trace.get("trace_id"),
+                "session_id": trace.get("session_id"),
+                "latency_ms": trace.get("latency_ms"),
+                "final_status": trace.get("final_status"),
+                "created_at": trace.get("start_time"),
+            }
+        )
+    return {"traces": traces}
+
+
+@app.get("/api/traces/{trace_id}")
+def get_trace(trace_id: str) -> dict[str, Any]:
+    trace = traces_store.load_trace(trace_id)
+    if trace is None:
+        raise HTTPException(status_code=404, detail="trace not found")
+    return trace
+
+
 if __name__ == "__main__":
     import uvicorn
 
