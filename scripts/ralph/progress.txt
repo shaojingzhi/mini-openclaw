@@ -557,3 +557,14 @@ Started: 2026年 6月 4日 星期四 00时57分56秒 CST
   - For chat observability, keep a normalized `events` list as the source of truth and derive `tool_calls` / `tool_failures` as convenience indexes in the same payload.
   - Tests that assert model metadata should follow the resolved environment default instead of hard-coding one model name, because this repo already runs under different OpenAI-compatible providers.
 ---
+
+## 2026-06-17 可观测性 / US-104
+- Added trace summary/detail APIs on top of the local JSON trace store.
+- Files changed:
+  - `backend/app.py` (new `/api/traces` list endpoint and `/api/traces/{trace_id}` detail endpoint)
+  - `backend/tests/test_api_traces.py` (new integration tests for list/detail/404)
+  - `scripts/ralph/prd.json` (marked US-104 complete)
+- **Learnings for future iterations:**
+  - The trace detail API can return the raw persisted payload directly because the trace store already normalizes the event shape; no extra DTO layer is needed yet.
+  - For reverse-chronological trace lists, sorting filenames is not enough long-term; today it works because we only need a light local view, but future iterations should sort by parsed `start_time` if we add pagination or cross-process writes.
+---
