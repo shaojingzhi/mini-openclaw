@@ -5,13 +5,16 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Bot,
   ChevronDown,
+  FileText,
   FileCode2,
+  FolderTree,
   History,
   Loader2,
   PanelRightOpen,
   RotateCcw,
   Save,
   Sparkles,
+  Settings2,
   WandSparkles,
 } from "lucide-react";
 import { Toaster, toast } from "sonner";
@@ -25,10 +28,12 @@ const MonacoEditor = dynamic(() => import("@/components/monaco-markdown-editor")
 });
 
 type NavId = "chat" | "memory" | "skills";
+type InspectorGroup = "workspace" | "memory" | "skills";
 
 type InspectorFile = {
   label: string;
   path: string;
+  group: InspectorGroup;
 };
 
 type TraceItem =
@@ -49,9 +54,13 @@ const navItems: Array<{ id: NavId; label: string; icon: typeof Bot }> = [
 ];
 
 const inspectorFiles: InspectorFile[] = [
-  { label: "Memory", path: "backend/memory/MEMORY.md" },
-  { label: "Agents", path: "backend/workspace/AGENTS.md" },
-  { label: "Weather Skill", path: "backend/skills/get_weather/SKILL.md" },
+  { label: "MEMORY.md", path: "backend/memory/MEMORY.md", group: "memory" },
+  { label: "SOUL.md", path: "backend/workspace/SOUL.md", group: "workspace" },
+  { label: "IDENTITY.md", path: "backend/workspace/IDENTITY.md", group: "workspace" },
+  { label: "USER.md", path: "backend/workspace/USER.md", group: "workspace" },
+  { label: "AGENTS.md", path: "backend/workspace/AGENTS.md", group: "workspace" },
+  { label: "SKILLS_SNAPSHOT.md", path: "backend/workspace/SKILLS_SNAPSHOT.md", group: "workspace" },
+  { label: "get_weather / SKILL.md", path: "backend/skills/get_weather/SKILL.md", group: "skills" },
 ];
 
 const MODEL_SETTINGS_STORAGE_KEY = "mini-openclaw-model-settings";
@@ -126,6 +135,18 @@ function stringifyToolInput(input: unknown): string {
   } catch {
     return String(input);
   }
+}
+
+function getInspectorGroupLabel(group: InspectorGroup): string {
+  if (group === "workspace") {
+    return "Workspace";
+  }
+
+  if (group === "memory") {
+    return "Memory";
+  }
+
+  return "Skills";
 }
 
 function appendEvent(message: Extract<ChatMessage, { role: "assistant" }>, event: ChatEvent): Extract<ChatMessage, { role: "assistant" }> {
@@ -396,7 +417,8 @@ export default function Home() {
 
   const activeSession = sessions.find((session) => session.name === activeSessionId) ?? null;
   const activeNavLabel = navItems.find((item) => item.id === activeNav)?.label ?? "Chat";
-  const selectedInspectorLabel = inspectorFiles.find((item) => item.path === selectedInspectorPath)?.label ?? selectedInspectorPath;
+  const selectedInspectorFile = inspectorFiles.find((item) => item.path === selectedInspectorPath) ?? null;
+  const selectedInspectorLabel = selectedInspectorFile?.label ?? selectedInspectorPath;
   const currentSessionStatus = activeSessionId ? (sessionStatus[activeSessionId] ?? "idle") : "idle";
   const sessionMessages = useMemo(() => {
     if (!activeSessionId) {
@@ -407,17 +429,34 @@ export default function Home() {
   }, [activeSessionId, messages]);
   const isDirty = initialInspectorLoad.current && loadedFilePath === selectedInspectorPath && editorValue !== "";
 
-  const activeViewDescription = useMemo(() => {
+  const activeViewDescription = "The chat stream stays centered while memory, skills, and prompt files live in the inspector rail.";
+  const visibleInspectorGroups = useMemo<InspectorGroup[]>(() => {
     if (activeNav === "memory") {
-      return "Review and edit long-term memory files without leaving the workspace.";
+      return ["memory"];
     }
 
     if (activeNav === "skills") {
-      return "Inspect the skill protocol and local skill definitions from the right-hand panel.";
+      return ["skills"];
     }
 
-    return "The stage now streams agent events live and tucks thought traces behind a collapsible block on every assistant reply.";
+    return ["workspace", "memory", "skills"];
   }, [activeNav]);
+  const groupedInspectorFiles = useMemo(
+    () =>
+      visibleInspectorGroups.map((group) => ({
+        group,
+        files: inspectorFiles.filter((file) => file.group === group),
+      })),
+    [visibleInspectorGroups],
+  );
+  const inspectorTitle = activeNav === "chat" ? "Workspace surfaces" : `${activeNavLabel} surfaces`;
+  const inspectorDescription =
+    activeNav === "memory"
+      ? "Review long-term memory on the right without replacing the live conversation."
+      : activeNav === "skills"
+        ? "Inspect skill definitions on the right while keeping the chat stage visible."
+        : "Inspect and edit the workspace prompt files, memory, and local skills from one rail.";
+  const selectedInspectorGroup = selectedInspectorFile?.group ?? "workspace";
 
   function focusChatWorkspace() {
     stageHeadingRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -552,29 +591,21 @@ export default function Home() {
   return (
     <>
       <Toaster position="top-right" richColors />
-      <main className="min-h-screen bg-[radial-gradient(circle_at_top_left,_rgba(29,78,216,0.12),_transparent_34%),radial-gradient(circle_at_bottom_right,_rgba(245,158,11,0.12),_transparent_28%),#fafafa] p-3 text-foreground sm:p-4">
-        <div className="sticky top-3 z-20 sm:top-4">
-          <div className="flex h-16 w-full items-center rounded-[24px] border border-white/80 bg-white/75 px-5 shadow-[0_18px_60px_rgba(15,23,42,0.10)] backdrop-blur-xl sm:px-6">
-            <div className="flex items-center gap-3">
-              <span className="rounded-full border border-primary/15 bg-primary/[0.08] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.3em] text-primary/70">
-                IDE
-              </span>
-              <span className="text-lg font-semibold tracking-tight text-[#002FA7] sm:text-xl">mini OpenClaw</span>
-            </div>
-          </div>
-        </div>
-
-        <div className="mt-3 flex min-h-[calc(100vh-5.75rem)] w-full flex-col rounded-[30px] border border-white/80 bg-white/55 p-3 shadow-[0_28px_120px_rgba(15,23,42,0.10)] backdrop-blur-xl sm:mt-4 sm:min-h-[calc(100vh-6rem)] sm:p-4">
-          <section className="grid min-h-0 flex-1 gap-3 lg:grid-cols-[240px_minmax(0,1fr)] 2xl:grid-cols-[240px_minmax(0,1fr)_420px]">
-            <aside className="rounded-[26px] border border-white/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.86),rgba(248,250,252,0.72))] p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.7)] lg:sticky lg:top-[5.75rem] lg:max-h-[calc(100vh-7rem)] lg:overflow-y-auto">
-              <div className="space-y-5">
-                <div>
-                  <p className="text-xs font-semibold uppercase tracking-[0.32em] text-primary/60">Workspace</p>
-                  <h1 className="mt-3 text-2xl font-semibold tracking-tight text-slate-950">mini OpenClaw</h1>
-                  <p className="mt-2 text-sm leading-6 text-slate-600">IDE-style agent shell with live sessions, staged reasoning, and file-first inspection.</p>
+      <main className="min-h-screen bg-[linear-gradient(180deg,#f8fafc_0%,#eef2ff_100%)] px-4 py-4 text-foreground sm:px-5 sm:py-5">
+        <div className="mx-auto w-full max-w-[1800px]">
+          <section className="flex flex-col gap-4 md:grid md:min-h-[calc(100vh-2.5rem)] md:grid-cols-[260px_minmax(0,1fr)] lg:grid-cols-[280px_minmax(0,1fr)] xl:grid-cols-[300px_minmax(0,1fr)]">
+            <aside className="flex min-h-0 flex-col rounded-[20px] border border-slate-800/80 bg-[linear-gradient(180deg,rgba(15,23,42,0.98),rgba(15,23,42,0.92))] p-4 shadow-[0_18px_50px_rgba(15,23,42,0.22)] sm:p-5 md:sticky md:top-4 md:h-[calc(100vh-2.5rem)] md:overflow-hidden lg:rounded-[22px]">
+              <div className="flex min-h-0 flex-1 flex-col gap-4 lg:gap-5">
+                <div className="border-b border-white/10 pb-4 lg:pb-5">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-sky-300/70">Workspace</p>
+                  <div className="mt-3 flex items-center justify-between gap-3">
+                    <h1 className="text-[1.4rem] font-semibold leading-tight tracking-tight text-white sm:text-[1.65rem] lg:text-2xl">mini OpenClaw</h1>
+                    <span className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] font-medium text-slate-300 lg:hidden">Local</span>
+                  </div>
+                  <p className="mt-2 max-w-sm text-sm leading-6 text-slate-300 sm:block">Local agent workspace for sessions, memory, and skills.</p>
                 </div>
 
-                <nav className="space-y-2" aria-label="Primary">
+                <nav className="grid grid-cols-3 gap-2 lg:space-y-2 lg:grid-cols-1 lg:gap-0" aria-label="Primary">
                   {navItems.map((item) => {
                     const Icon = item.icon;
                     const active = item.id === activeNav;
@@ -583,29 +614,29 @@ export default function Home() {
                       <button
                         key={item.id}
                         className={[
-                          "flex w-full items-center gap-3 rounded-2xl border px-4 py-3 text-left text-sm transition-all",
+                          "flex w-full items-center justify-center gap-2 rounded-xl border px-3 py-3 text-center text-sm transition-all duration-150 lg:justify-start lg:gap-3 lg:px-4 lg:text-left",
                           active
-                            ? "border-primary/20 bg-primary/[0.08] font-medium text-slate-950 shadow-sm"
-                            : "border-transparent bg-transparent text-slate-600 hover:border-slate-200 hover:bg-white/70 hover:text-slate-950",
+                            ? "border-sky-400/30 bg-sky-400/12 font-medium text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]"
+                            : "border-transparent bg-transparent text-slate-300 hover:border-white/10 hover:bg-white/5 hover:text-white",
                         ].join(" ")}
                         onClick={() => setActiveNav(item.id)}
                         type="button"
                       >
-                        <Icon className={["h-4 w-4", active ? "text-primary" : "text-slate-400"].join(" ")} />
+                        <Icon className={["h-4 w-4", active ? "text-sky-300" : "text-slate-500"].join(" ")} />
                         {item.label}
                       </button>
                     );
                   })}
                 </nav>
 
-                <div className="rounded-[24px] border border-slate-200/80 bg-white/80 p-4">
+                <div className="flex min-h-0 flex-1 flex-col rounded-[18px] border border-white/10 bg-white/5 p-4">
                   <div className="flex items-center justify-between gap-3">
-                    <p className="text-xs font-semibold uppercase tracking-[0.26em] text-slate-500">Sessions</p>
-                    <span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-medium text-slate-500">{sessions.length}</span>
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-400">Sessions</p>
+                    <span className="rounded-full bg-white/10 px-2 py-1 text-[11px] font-medium text-slate-300">{sessions.length}</span>
                   </div>
-                  <div className="mt-4 space-y-2 pr-1 lg:max-h-[calc(100vh-21rem)] lg:overflow-y-auto">
+                  <div className="mt-3 max-h-40 min-h-0 flex-1 space-y-2 overflow-y-auto pr-1 sm:max-h-52 lg:mt-4 lg:max-h-none">
                     {sessions.length === 0 ? (
-                      <div className="rounded-2xl border border-dashed border-slate-200 px-4 py-3 text-sm text-slate-500">
+                      <div className="rounded-xl border border-dashed border-white/10 px-4 py-3 text-sm text-slate-400">
                         <p>No sessions yet.</p>
                         <p className="mt-1 text-xs">The chat stage will keep working with a local draft session.</p>
                       </div>
@@ -617,17 +648,17 @@ export default function Home() {
                           <button
                             key={session.name}
                             className={[
-                              "w-full rounded-2xl border px-4 py-3 text-left transition-all",
+                              "w-full rounded-lg border px-4 py-3 text-left transition-all duration-150",
                               active
-                                ? "border-primary/20 bg-[linear-gradient(135deg,rgba(37,99,235,0.10),rgba(255,255,255,0.92))] shadow-sm"
-                                : "border-transparent bg-transparent hover:border-slate-200 hover:bg-white/70",
+                                ? "border-sky-400/25 bg-sky-400/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"
+                                : "border-transparent bg-transparent hover:border-white/10 hover:bg-white/5",
                             ].join(" ")}
                             onClick={() => handleSessionSelect(session.name)}
                             type="button"
                           >
                             <div className="flex items-center justify-between gap-3">
-                              <span className="truncate text-sm font-medium text-slate-900">{session.name}</span>
-                              <span className="text-xs text-slate-500">{session.message_count} msgs</span>
+                              <span className="truncate text-sm font-medium text-white">{session.name}</span>
+                              <span className="text-xs text-slate-400">{session.message_count} msgs</span>
                             </div>
                             <p className="mt-1 text-xs text-slate-500">{formatTimestamp(session.last_modified)}</p>
                           </button>
@@ -639,214 +670,260 @@ export default function Home() {
               </div>
             </aside>
 
-            <div className="grid min-h-0 grid-cols-1 gap-3 2xl:grid-cols-[minmax(0,1fr)_420px]">
-              <section className="flex min-h-[60vh] min-w-0 flex-col rounded-[26px] border border-white/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.86),rgba(244,247,251,0.78))] p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.7)] sm:p-6 lg:min-h-0 lg:h-[calc(100vh-7rem)]">
-                <div className="flex flex-col gap-4 border-b border-slate-200/80 pb-5 sm:flex-row sm:items-end sm:justify-between">
+            <div className="flex min-h-0 flex-col gap-4">
+              <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(420px,36vw)] xl:grid-cols-[minmax(0,1fr)_minmax(460px,38vw)] 2xl:grid-cols-[minmax(0,1fr)_minmax(560px,42vw)]">
+                <section className="flex min-h-[60vh] min-w-0 flex-col rounded-[20px] border border-slate-200/80 bg-white p-5 shadow-[0_12px_34px_rgba(15,23,42,0.06)] sm:p-6 lg:h-[calc(100vh-2.5rem)] lg:overflow-hidden lg:rounded-[22px]">
+                <div className="flex flex-col gap-3 border-b border-slate-200/80 pb-4 sm:flex-row sm:items-center sm:justify-between">
                   <div className="space-y-2">
-                    <p className="text-xs font-semibold uppercase tracking-[0.32em] text-primary/60">Stage</p>
-                    <h2 className="text-3xl font-semibold tracking-tight text-slate-950" ref={stageHeadingRef}>{activeNavLabel} workspace</h2>
-                    <p className="max-w-2xl text-sm leading-6 text-slate-600">{activeViewDescription}</p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-400">Chat</p>
+                      <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                        mini OpenClaw
+                      </span>
+                    </div>
+                    <h2 className="text-[1.35rem] font-semibold tracking-tight text-slate-950 sm:text-[1.5rem]" ref={stageHeadingRef}>
+                      Chat workspace
+                    </h2>
                   </div>
-                  <div className="flex items-center gap-3 rounded-2xl border border-slate-200/80 bg-white/90 px-3 py-3 shadow-sm sm:self-start">
-                    {isStreaming ? <Loader2 className="h-4 w-4 animate-spin text-primary" /> : <WandSparkles className="h-4 w-4 text-primary" />}
-                    <span className="text-sm font-medium text-slate-700">Session {activeSession?.name ?? activeSessionId ?? "draft"}</span>
+                  <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 sm:self-start">
+                    {isStreaming ? <Loader2 className="h-4 w-4 animate-spin text-primary" /> : <WandSparkles className="h-4 w-4 text-slate-400" />}
+                    <span className="truncate text-sm font-medium text-slate-700">Session {activeSession?.name ?? activeSessionId ?? "draft"}</span>
                   </div>
                 </div>
 
                 <div className="flex min-h-0 flex-1 flex-col justify-between gap-6 pt-6">
                   <div className="min-h-0 flex-1 overflow-y-auto pr-1">
-                    {activeNav === "chat" ? (
-                      <div className="space-y-4">
-                        <div className="rounded-[24px] border border-primary/15 bg-[linear-gradient(135deg,rgba(239,246,255,0.92),rgba(255,255,255,0.96))] p-5 shadow-sm">
-                          <p className="text-xs font-semibold uppercase tracking-[0.22em] text-primary/70">Conversation History</p>
-                          <p className="mt-3 text-sm leading-7 text-slate-700">
-                            Current session: <span className="font-semibold text-slate-950">{activeSession?.name ?? activeSessionId ?? "draft session"}</span>.
-                            Select a session on the left and continue the conversation below.
+                    <div className="space-y-4">
+                      <div className="rounded-[16px] border border-slate-200 bg-slate-50/80 px-4 py-3">
+                        <p className="text-sm text-slate-600">
+                          Current session: <span className="font-semibold text-slate-950">{activeSession?.name ?? activeSessionId ?? "draft session"}</span>
+                        </p>
+                        {activeNav !== "chat" ? (
+                          <p className="mt-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-500">
+                            Inspector focus is on <span className="font-semibold text-slate-700">{activeNavLabel}</span>. The conversation stays live here.
                           </p>
+                        ) : null}
+                      </div>
+                      {currentSessionStatus === "loading" ? (
+                        <div className="rounded-[24px] border border-dashed border-slate-200 bg-white/80 p-6 text-sm text-slate-500">
+                          Loading session history...
                         </div>
-                        {currentSessionStatus === "loading" ? (
-                          <div className="rounded-[24px] border border-dashed border-slate-200 bg-white/80 p-6 text-sm text-slate-500">
-                            Loading session history...
-                          </div>
-                        ) : null}
-                        {currentSessionStatus !== "loading" && sessionMessages.length === 0 ? (
-                          <div className="rounded-[24px] border border-dashed border-slate-200 bg-white/80 p-6 text-sm text-slate-500">
-                            No messages in this session yet. Send the first prompt to get started.
-                          </div>
-                        ) : null}
-                        {sessionMessages.map((message) => {
-                          if (message.role === "user") {
-                            return (
-                              <article key={message.id} className="max-w-[90%] rounded-[24px] border border-slate-200/80 bg-white/90 p-5 shadow-sm xl:max-w-[82%]">
-                                <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">User</p>
-                                <p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-slate-700">{message.content}</p>
-                              </article>
-                            );
-                          }
-
+                      ) : null}
+                      {currentSessionStatus !== "loading" && sessionMessages.length === 0 ? (
+                        <div className="rounded-[24px] border border-dashed border-slate-200 bg-white/80 p-6 text-sm text-slate-500">
+                          No messages in this session yet. Send the first prompt to get started.
+                        </div>
+                      ) : null}
+                      {sessionMessages.map((message) => {
+                        if (message.role === "user") {
                           return (
-                            <article key={message.id} className="ml-auto max-w-[94%] rounded-[24px] border border-primary/15 bg-[linear-gradient(135deg,rgba(255,255,255,0.94),rgba(219,234,254,0.92))] p-5 shadow-[0_20px_50px_rgba(37,99,235,0.10)] xl:max-w-[88%]">
-                              <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.22em] text-primary/70">
-                                <Bot className="h-4 w-4" />
-                                Assistant
-                              </div>
-                              <p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-slate-700">
-                                {message.content || (isStreaming ? "Streaming response..." : "Waiting for assistant output.")}
-                              </p>
-                              <TraceBlock messageId={message.id} trace={message.trace} />
+                            <article key={message.id} className="max-w-[90%] rounded-[18px] border border-slate-200 bg-slate-50/80 p-5 xl:max-w-[82%]">
+                              <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">User</p>
+                              <p className="mt-3 whitespace-pre-wrap text-[15px] leading-7 text-slate-700">{message.content}</p>
                             </article>
                           );
-                        })}
-                      </div>
-                    ) : null}
+                        }
 
-                    {activeNav === "memory" ? (
-                      <div className="space-y-4">
-                        <div className="rounded-[24px] border border-slate-200/80 bg-white/90 p-5 shadow-sm">
-                          <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">Memory View</p>
-                          <p className="mt-3 text-sm leading-7 text-slate-700">
-                            Use the right-hand inspector to review and edit `backend/memory/MEMORY.md`. This view is for long-term notes and user preferences rather than live chat.
-                          </p>
-                        </div>
-                        <div className="rounded-[24px] border border-dashed border-slate-200 bg-white/70 p-5 text-sm text-slate-500">
-                          Selected file: {selectedInspectorPath}
-                        </div>
-                      </div>
-                    ) : null}
-
-                    {activeNav === "skills" ? (
-                      <div className="space-y-4">
-                        <div className="rounded-[24px] border border-slate-200/80 bg-white/90 p-5 shadow-sm">
-                          <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">Skills View</p>
-                          <p className="mt-3 text-sm leading-7 text-slate-700">
-                            Use the right-hand inspector to switch between the skill protocol and specific skill files. This pane is meant for browsing how the agent should behave, not for chatting.
-                          </p>
-                        </div>
-                        <div className="rounded-[24px] border border-dashed border-slate-200 bg-white/70 p-5 text-sm text-slate-500">
-                          Current inspector file: {selectedInspectorPath}
-                        </div>
-                      </div>
-                    ) : null}
+                        return (
+                          <article key={message.id} className="ml-auto max-w-[94%] rounded-[18px] border border-sky-200 bg-[linear-gradient(135deg,#eff6ff,#ffffff)] p-5 xl:max-w-[88%]">
+                            <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.2em] text-sky-700">
+                              <Bot className="h-4 w-4" />
+                              Assistant
+                            </div>
+                            <p className="mt-3 whitespace-pre-wrap text-[15px] leading-7 text-slate-700">
+                              {message.content || (isStreaming ? "Streaming response..." : "Waiting for assistant output.")}
+                            </p>
+                            <TraceBlock messageId={message.id} trace={message.trace} />
+                          </article>
+                        );
+                      })}
+                    </div>
                   </div>
 
-                  <div className="rounded-[26px] border border-slate-200/80 bg-white/88 p-4 shadow-sm">
-                    <form className="flex flex-col gap-3 xl:flex-row" onSubmit={handleSubmit}>
+                  <div className="rounded-[18px] border border-slate-200 bg-slate-50/90 p-4 lg:rounded-[20px]">
+                    <form className="flex flex-col gap-3 2xl:flex-row" onSubmit={handleSubmit}>
                       <Input
                         aria-label="Chat composer"
-                        className="h-14 min-w-0 rounded-2xl border-slate-200 bg-slate-50/80 px-4 text-base"
-                        disabled={activeNav !== "chat"}
+                        className="h-14 min-w-0 rounded-xl border-slate-200 bg-white px-4 text-base shadow-sm"
                         ref={composerRef}
                         onChange={(event) => setDraft(event.target.value)}
-                        placeholder={activeNav === "chat" ? "Ask the agent to inspect a skill, fetch a file, or explain the current session." : "Switch back to Chat to send messages."}
+                        placeholder="Ask the agent to inspect a skill, fetch a file, or explain the current session."
                         value={draft}
                       />
-                      <Button className="h-14 rounded-2xl px-6 text-base xl:min-w-36" disabled={activeNav !== "chat" || isStreaming || !draft.trim()} type="submit">
+                      <Button className="h-14 rounded-xl px-6 text-base xl:min-w-36" disabled={isStreaming || !draft.trim()} type="submit">
                         {isStreaming ? "Streaming..." : "Send"}
                       </Button>
                     </form>
-                    {activeNav === "chat" ? <p className="mt-3 text-sm text-slate-500">Continue this conversation from here.</p> : null}
-                    {activeNav !== "chat" ? <p className="mt-3 text-sm text-slate-500">This composer is only active in Chat view.</p> : null}
+                    <p className="mt-2 text-sm text-slate-500">Continue this session here.</p>
                     {streamError ? <p className="mt-3 text-sm text-rose-600">{streamError}</p> : null}
                   </div>
                 </div>
               </section>
 
-              <section className="flex min-h-[60vh] min-w-0 flex-col rounded-[26px] border border-white/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.84),rgba(247,248,252,0.80))] p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.7)] lg:min-h-0 lg:h-[calc(100vh-7rem)] 2xl:sticky 2xl:top-[5.75rem] 2xl:max-h-[calc(100vh-7rem)]">
+              <section className="flex min-h-[60vh] min-w-0 flex-col rounded-[20px] border border-slate-200/80 bg-[#f6f8fc] p-4 shadow-[0_12px_34px_rgba(15,23,42,0.05)] sm:p-5 lg:h-[calc(100vh-2.5rem)] lg:overflow-hidden lg:rounded-[22px]">
                 <div className="flex items-start justify-between gap-4 border-b border-slate-200/80 pb-5">
                   <div>
-                    <p className="text-xs font-semibold uppercase tracking-[0.32em] text-primary/60">Inspector</p>
-                    <h2 className="mt-3 text-2xl font-semibold tracking-tight text-slate-950">Prompt and skill surfaces</h2>
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-400">Inspector</p>
+                    <h2 className="mt-3 text-2xl font-semibold tracking-tight text-slate-950">{inspectorTitle}</h2>
+                    <p className="mt-2 text-sm leading-6 text-slate-500">{inspectorDescription}</p>
                   </div>
-                  <div className="rounded-2xl border border-slate-200/80 bg-white/85 p-3 text-slate-500">
-                    <PanelRightOpen className="h-5 w-5" />
-                  </div>
-                </div>
-
-                <div className="mt-6 rounded-[24px] border border-slate-200/80 bg-white/90 p-4 shadow-sm">
-                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                    <div>
-                      <p className="text-sm font-semibold text-slate-900">Model Settings</p>
-                      <p className="mt-1 text-xs leading-5 text-slate-500">Sent with each chat request. Leave `API Key` empty to use the backend default.</p>
-                    </div>
-                    <Button className="h-9 rounded-2xl px-3" onClick={handleResetModelSettings} type="button" variant="outline">
-                      <RotateCcw className="mr-2 h-4 w-4" />
-                      Reset
-                    </Button>
-                  </div>
-
-                  <div className="mt-4 space-y-3">
-                    <div className="space-y-2">
-                      <label className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">Base URL</label>
-                      <Input
-                        className="h-11 rounded-2xl border-slate-200 bg-slate-50/80"
-                        onChange={(event) => handleModelSettingChange("baseUrl", event.target.value)}
-                        placeholder="https://api.codexzh.com/v1"
-                        value={modelSettings.baseUrl}
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <label className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">Model</label>
-                      <Input
-                        className="h-11 rounded-2xl border-slate-200 bg-slate-50/80"
-                        onChange={(event) => handleModelSettingChange("model", event.target.value)}
-                        placeholder="gpt-5.4"
-                        value={modelSettings.model}
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <label className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">API Key</label>
-                      <Input
-                        className="h-11 rounded-2xl border-slate-200 bg-slate-50/80"
-                        onChange={(event) => handleModelSettingChange("apiKey", event.target.value)}
-                        placeholder="Leave empty to use backend default"
-                        type="password"
-                        value={modelSettings.apiKey}
-                      />
-                    </div>
+                  <div className="flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-500">
+                    <span className="h-2 w-2 rounded-full bg-emerald-500" />
+                    Local agent workspace
                   </div>
                 </div>
 
-                <div className="mt-6 flex items-center gap-3 rounded-2xl border border-slate-200/80 bg-white/85 px-4 py-3 shadow-sm">
-                  <FileCode2 className="h-4 w-4 text-primary" />
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium text-slate-900">{selectedInspectorLabel}</p>
-                    <p className="truncate text-xs text-slate-500">{selectedInspectorPath}</p>
+                <div className="mt-5 flex flex-wrap items-center gap-2">
+                  {visibleInspectorGroups.map((group) => (
+                    <span
+                      key={group}
+                      className="rounded-full border border-slate-200 bg-white px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500"
+                    >
+                      {getInspectorGroupLabel(group)}
+                    </span>
+                  ))}
+                  <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500">
+                    {inspectorFiles.length} files
+                  </span>
+                </div>
+
+                <div className="mt-4 grid min-h-0 flex-1 gap-4 2xl:grid-cols-[240px_minmax(0,1fr)]">
+                  <div className="flex min-h-[220px] max-h-[320px] flex-col rounded-[18px] border border-slate-200 bg-white p-3 shadow-sm 2xl:max-h-none">
+                    <div className="flex items-center justify-between gap-2 px-2 pb-3">
+                      <div className="flex items-center gap-2">
+                      <FolderTree className="h-4 w-4 text-slate-400" />
+                      <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Files</p>
+                      </div>
+                      <PanelRightOpen className="h-4 w-4 text-slate-300" />
+                    </div>
+                    <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
+                      {groupedInspectorFiles.map(({ group, files }) => (
+                        <div key={group} className="space-y-1.5">
+                          <p className="px-2 text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-400">{getInspectorGroupLabel(group)}</p>
+                          <div className="space-y-1">
+                            {files.map((file) => {
+                              const active = file.path === selectedInspectorPath;
+
+                              return (
+                                <button
+                                  key={file.path}
+                                  className={[
+                                    "flex w-full items-start gap-3 rounded-xl border px-3 py-2.5 text-left transition",
+                                    active
+                                      ? "border-slate-900 bg-slate-950 text-white shadow-[0_10px_25px_rgba(15,23,42,0.18)]"
+                                      : "border-transparent bg-slate-50/80 text-slate-700 hover:border-slate-200 hover:bg-slate-100",
+                                  ].join(" ")}
+                                  onClick={() => setSelectedInspectorPath(file.path)}
+                                  type="button"
+                                >
+                                  <FileText className={["mt-0.5 h-4 w-4 shrink-0", active ? "text-white/80" : "text-slate-400"].join(" ")} />
+                                  <div className="min-w-0 flex-1">
+                                    <p className="truncate text-sm font-medium">{file.label}</p>
+                                    <p className={["mt-1 truncate text-[11px]", active ? "text-white/60" : "text-slate-400"].join(" ")}>
+                                      {file.path}
+                                    </p>
+                                  </div>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="flex min-h-[440px] min-w-0 flex-col rounded-[18px] border border-slate-200 bg-white shadow-sm 2xl:min-h-[520px]">
+                    <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <FileCode2 className="h-4 w-4 text-primary" />
+                          <p className="truncate text-sm font-semibold text-slate-900">{selectedInspectorLabel}</p>
+                          <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                            {getInspectorGroupLabel(selectedInspectorGroup)}
+                          </span>
+                          {isDirty ? (
+                            <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-amber-700">
+                              Unsaved
+                            </span>
+                          ) : null}
+                        </div>
+                        <p className="mt-1 truncate text-xs text-slate-500">{selectedInspectorPath}</p>
+                      </div>
+                      <Button className="h-10 rounded-xl px-4 sm:shrink-0" disabled={isInspectorLoading || isSaving} onClick={handleSaveInspector} type="button">
+                        {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+                        Save
+                      </Button>
+                    </div>
+
+                    <div className="min-h-[340px] flex-1 overflow-hidden 2xl:min-h-[420px]">
+                      {isInspectorLoading ? (
+                        <div className="flex h-full items-center justify-center gap-3 text-sm text-slate-500">
+                          <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                          Loading file...
+                        </div>
+                      ) : (
+                        <MonacoEditor height="100%" onChange={setEditorValue} onSave={handleSaveInspector} value={editorValue} />
+                      )}
+                    </div>
+
+                    <div className="border-t border-slate-200 px-4 py-3">
+                      <p className="text-sm text-slate-600">
+                        {isSaving ? "Saving changes..." : inspectorError ? `Save error: ${inspectorError}` : "Cmd/Ctrl+S saves the current file."}
+                      </p>
+                    </div>
                   </div>
                 </div>
 
-                <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center">
-                  <select
-                    className="h-11 min-w-0 flex-1 rounded-2xl border border-slate-200/80 bg-white/90 px-4 text-sm text-slate-700 shadow-sm outline-none transition focus:border-primary/30"
-                    onChange={(event) => setSelectedInspectorPath(event.target.value)}
-                    value={selectedInspectorPath}
-                  >
-                    {inspectorFiles.map((file) => (
-                      <option key={file.path} value={file.path}>
-                        {file.label}
-                      </option>
-                    ))}
-                  </select>
-                  <Button className="h-11 rounded-2xl px-4 sm:shrink-0" disabled={isInspectorLoading || isSaving} onClick={handleSaveInspector} type="button">
-                    {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
-                    Save
-                  </Button>
-                </div>
-
-                <div className="mt-4 min-h-[320px] flex-1 overflow-hidden rounded-[24px] border border-slate-200 bg-white/90 shadow-sm">
-                  {isInspectorLoading ? (
-                    <div className="flex h-full items-center justify-center gap-3 text-sm text-slate-500">
-                      <Loader2 className="h-4 w-4 animate-spin text-primary" />
-                      Loading file...
+                <details className="mt-4 rounded-[18px] border border-slate-200 bg-white">
+                  <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-medium text-slate-700 marker:content-none">
+                    <span className="flex items-center gap-2">
+                      <Settings2 className="h-4 w-4 text-slate-400" />
+                      Model Settings
+                    </span>
+                    <ChevronDown className="h-4 w-4 text-slate-400 transition-transform group-open:rotate-180" />
+                  </summary>
+                  <div className="border-t border-slate-200 px-4 py-4">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                      <p className="text-xs leading-5 text-slate-500">Sent with each chat request. Leave `API Key` empty to use the backend default.</p>
+                      <Button className="h-9 rounded-2xl px-3" onClick={handleResetModelSettings} type="button" variant="outline">
+                        <RotateCcw className="mr-2 h-4 w-4" />
+                        Reset
+                      </Button>
                     </div>
-                  ) : (
-                    <MonacoEditor height="100%" onChange={setEditorValue} onSave={handleSaveInspector} value={editorValue} />
-                  )}
-                </div>
 
-                <div className="mt-4 rounded-2xl border border-slate-200/80 bg-white/90 px-4 py-3 text-sm text-slate-600 shadow-sm">
-                  <p>{isSaving ? "Saving changes..." : inspectorError ? `Save error: ${inspectorError}` : "Cmd/Ctrl+S saves the current file."}</p>
-                </div>
+                    <div className="mt-4 grid gap-3">
+                      <div className="space-y-2">
+                        <label className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">Base URL</label>
+                        <Input
+                          className="h-11 rounded-2xl border-slate-200 bg-slate-50/80"
+                          onChange={(event) => handleModelSettingChange("baseUrl", event.target.value)}
+                          placeholder="https://api.codexzh.com/v1"
+                          value={modelSettings.baseUrl}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">Model</label>
+                        <Input
+                          className="h-11 rounded-2xl border-slate-200 bg-slate-50/80"
+                          onChange={(event) => handleModelSettingChange("model", event.target.value)}
+                          placeholder="gpt-5.4"
+                          value={modelSettings.model}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">API Key</label>
+                        <Input
+                          className="h-11 rounded-2xl border-slate-200 bg-slate-50/80"
+                          onChange={(event) => handleModelSettingChange("apiKey", event.target.value)}
+                          placeholder="Leave empty to use backend default"
+                          type="password"
+                          value={modelSettings.apiKey}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </details>
               </section>
+            </div>
             </div>
           </section>
         </div>
