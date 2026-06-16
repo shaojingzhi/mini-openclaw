@@ -20,7 +20,7 @@ from sse_starlette import EventSourceResponse
 from dotenv import load_dotenv
 
 from backend.graph.agent import build_agent
-from backend import sessions_store
+from backend import sessions_store, traces_store
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
@@ -74,6 +74,10 @@ class FileWriteRequest(BaseModel):
 class SessionMessage(BaseModel):
     role: str
     content: str
+
+
+def _resolve_model_name(request: ChatRequest) -> str:
+    return request.model or os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
 
 def _resolve_allowed_file_path(raw_path: str) -> Path:
@@ -191,6 +195,11 @@ async def _chat_sse(request: ChatRequest) -> AsyncIterator[dict[str, str]]:
         request.session_id,
         {"role": "user", "content": request.message},
     )
+    trace = traces_store.create_trace(
+        session_id=request.session_id,
+        model_name=_resolve_model_name(request),
+    )
+    traces_store.append_event(trace, kind="user_message", payload={"content": request.message})
     agent = build_agent(
         api_key=request.api_key,
         base_url=request.base_url,
@@ -201,23 +210,26 @@ async def _chat_sse(request: ChatRequest) -> AsyncIterator[dict[str, str]]:
 
     try:
         async for event_type, event_payload in _stream_agent_events(agent, payload):
+            traces_store.append_event(trace, kind=event_type, payload=event_payload)
             if event_type == "final":
                 final_text = _coerce_text(event_payload.get("content", ""))
             yield {
                 "event": event_type,
                 "data": json.dumps(event_payload, ensure_ascii=False),
             }
+        traces_store.finalize_trace(trace, final_status="success")
     except Exception as exc:
         final_text = "The assistant could not complete the request."
+        error_payload = {
+            "name": "agent_error",
+            "content": _agent_error_message(exc),
+        }
+        traces_store.append_event(trace, kind="tool_result", payload=error_payload)
+        traces_store.append_event(trace, kind="final", payload={"content": final_text})
+        traces_store.finalize_trace(trace, final_status="error")
         yield {
             "event": "tool_result",
-            "data": json.dumps(
-                {
-                    "name": "agent_error",
-                    "content": _agent_error_message(exc),
-                },
-                ensure_ascii=False,
-            ),
+            "data": json.dumps(error_payload, ensure_ascii=False),
         }
         yield {
             "event": "final",
@@ -228,6 +240,7 @@ async def _chat_sse(request: ChatRequest) -> AsyncIterator[dict[str, str]]:
         request.session_id,
         {"role": "assistant", "content": final_text},
     )
+    traces_store.save_trace(trace)
 
 
 @app.get("/health")
@@ -244,6 +257,11 @@ async def chat(request: ChatRequest) -> Any:
         request.session_id,
         {"role": "user", "content": request.message},
     )
+    trace = traces_store.create_trace(
+        session_id=request.session_id,
+        model_name=_resolve_model_name(request),
+    )
+    traces_store.append_event(trace, kind="user_message", payload={"content": request.message})
     agent = build_agent(
         api_key=request.api_key,
         base_url=request.base_url,
@@ -255,16 +273,27 @@ async def chat(request: ChatRequest) -> Any:
             {"messages": sessions_store.load_session(request.session_id)},
         )
         final_text = _extract_final_reply(result)
+        traces_store.append_event(trace, kind="final", payload={"content": final_text})
+        traces_store.finalize_trace(trace, final_status="success")
     except Exception as exc:
+        error_message = _agent_error_message(exc)
+        traces_store.append_event(
+            trace,
+            kind="tool_result",
+            payload={"name": "agent_error", "content": error_message},
+        )
+        traces_store.finalize_trace(trace, final_status="error")
+        traces_store.save_trace(trace)
         raise HTTPException(
             status_code=502,
-            detail=f"agent execution failed: {_agent_error_message(exc)}",
+            detail=f"agent execution failed: {error_message}",
         ) from exc
     sessions_store.append_message(
         request.session_id,
         {"role": "assistant", "content": final_text},
     )
-    return {"reply": final_text}
+    traces_store.save_trace(trace)
+    return {"reply": final_text, "trace_id": trace["trace_id"]}
 
 
 @app.get("/api/files")

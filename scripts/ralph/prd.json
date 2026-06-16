@@ -434,8 +434,8 @@
         "Tests pass"
       ],
       "priority": 3,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Added local JSON trace persistence under backend/data/traces via backend/traces_store.py. Both streaming and non-streaming /api/chat flows now generate a trace_id, record structured events, capture tool calls and agent_error failures, store latency/model/final_status metadata, and persist the trace to disk. Added unit/integration coverage for trace roundtrip, successful chat traces, and failure traces."
     },
     {
       "id": "US-104",
