@@ -543,3 +543,17 @@ Started: 2026年 6月 4日 星期四 00时57分56秒 CST
   - Keep the JSON report as the machine-readable source of truth and derive Markdown from it; that avoids report drift when we later plug in real agent execution.
   - Backward compatibility matters here: custom evaluators may still accept only `(task)`, so the runner now adapts to evaluators that accept either `(task)` or `(task, profile)`.
 ---
+
+## 2026-06-17 可观测性 / US-103
+- Added local JSON trace persistence for `/api/chat` in both streaming and non-streaming paths.
+- Files changed:
+  - `backend/traces_store.py` (new — trace creation, event append, finalize, save/load helpers)
+  - `backend/app.py` (chat routes now create trace_id, append events, persist success/error traces)
+  - `backend/tests/test_traces_store.py` (new — trace roundtrip and failure accounting)
+  - `backend/tests/test_api_chat.py` (expanded — success + failure trace coverage)
+  - `scripts/ralph/prd.json` (marked US-103 complete)
+- **Learnings for future iterations:**
+  - Trace persistence should live in a dedicated store module instead of being embedded in route code; that makes upcoming trace list/detail APIs much easier to add.
+  - For chat observability, keep a normalized `events` list as the source of truth and derive `tool_calls` / `tool_failures` as convenience indexes in the same payload.
+  - Tests that assert model metadata should follow the resolved environment default instead of hard-coding one model name, because this repo already runs under different OpenAI-compatible providers.
+---
