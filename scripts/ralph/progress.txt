@@ -3,6 +3,7 @@ Started: 2026年 6月 4日 星期四 00时57分56秒 CST
 ---
 
 ## Codebase Patterns
+- New offline eval work should live under `backend/evals/` with a file-based dataset + report contract. Keep `backend/evals/__init__.py` import-light; `python -m backend.evals.runner` will emit a runtime warning if the package pre-imports `runner` before module execution.
 - Frontend sidebar interactions in `frontend/src/app/page.tsx` can stay client-only for now: fetch `/api/sessions` inside `useEffect`, keep `activeNav` and `activeSessionId` in local state, and derive the visible highlight classes from that state instead of hard-coded placeholder booleans.
 - Frontend chat transcripts can stay page-local too: keep `Record<sessionId, ChatMessage[]>` state in `frontend/src/app/page.tsx`, seed a per-session assistant placeholder before starting `streamChat()`, and fold each SSE event into that placeholder so `final` text and the reasoning trace stay attached to one visible bubble.
 - Frontend shell uses a fixed top nav mounted as a sibling above the main frosted workspace card. When adding persistent chrome, offset the page with top padding (`pt-24` / `sm:pt-28`) and shrink the shell min-height instead of nesting the nav inside the card.
