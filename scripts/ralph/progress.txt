@@ -514,3 +514,18 @@ Started: 2026年 6月 4日 星期四 00时57分56秒 CST
   - File-editor save UX is simple and reliable when the page owns the selected path, current buffer, and toast lifecycle directly.
   - Cmd/Ctrl+S can be supported both with a global keydown listener and Monaco command binding for a consistent editor feel.
 ---
+
+## 2026-06-17 评测 / US-101
+- Implemented an offline evaluation runner and a 20-task seed dataset for Mini-OpenClaw.
+- Files changed:
+  - `scripts/ralph/prd.json` (rewrote the Ralph task list to the new improvement plan and marked US-101 complete)
+  - `backend/evals/__init__.py` (new)
+  - `backend/evals/runner.py` (new — dataset loader, metrics aggregation, JSON report writer, CLI entrypoint)
+  - `backend/evals/datasets/core_tasks.json` (new — 20 seed tasks covering file reading, skills, terminal, multi-turn context, and knowledge retrieval)
+  - `backend/knowledge/eval_agent_notes.md` (new — knowledge note for the eval demo and interview positioning)
+  - `backend/tests/test_eval_runner.py` (new — tests for loading, aggregation, and output writing)
+- **Learnings for future iterations:**
+  - Offline evals should stay file-based and runnable from the repo root so they fit the project’s local-first philosophy.
+  - A small seed dataset is enough to prove the product shape early; the runner can later be swapped to real agent execution without changing the reporting contract.
+  - `python -m backend.evals.runner` is the right CLI shape for future automation, but `backend/evals/__init__.py` should stay import-light to avoid package preload warnings.
+---
