@@ -530,3 +530,16 @@ Started: 2026年 6月 4日 星期四 00时57分56秒 CST
   - A small seed dataset is enough to prove the product shape early; the runner can later be swapped to real agent execution without changing the reporting contract.
   - `python -m backend.evals.runner` is the right CLI shape for future automation, but `backend/evals/__init__.py` should stay import-light to avoid package preload warnings.
 ---
+
+## 2026-06-17 评测 / US-102
+- Added file-based eval profiles and Markdown report generation for ablation analysis.
+- Files changed:
+  - `backend/evals/runner.py` (profile loading/selection, multi-profile execution, ablation comparison, Markdown rendering)
+  - `backend/evals/profiles.json` (new baseline/no_memory/no_skills/no_retrieval profile config)
+  - `backend/tests/test_eval_runner.py` (new tests for profiles, comparison, and Markdown output)
+  - `scripts/ralph/prd.json` (marked US-102 complete)
+- **Learnings for future iterations:**
+  - Eval profile config should stay data-driven in JSON so future capability toggles can be added without editing the runner contract.
+  - Keep the JSON report as the machine-readable source of truth and derive Markdown from it; that avoids report drift when we later plug in real agent execution.
+  - Backward compatibility matters here: custom evaluators may still accept only `(task)`, so the runner now adapts to evaluators that accept either `(task)` or `(task, profile)`.
+---
