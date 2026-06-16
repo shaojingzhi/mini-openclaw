@@ -568,3 +568,15 @@ Started: 2026年 6月 4日 星期四 00时57分56秒 CST
   - The trace detail API can return the raw persisted payload directly because the trace store already normalizes the event shape; no extra DTO layer is needed yet.
   - For reverse-chronological trace lists, sorting filenames is not enough long-term; today it works because we only need a light local view, but future iterations should sort by parsed `start_time` if we add pagination or cross-process writes.
 ---
+
+## 2026-06-17 可观测性 / US-105
+- Added a frontend runtime diagnostics panel wired to the trace summary/detail APIs and verified it in the in-app browser.
+- Files changed:
+  - `frontend/src/lib/api.ts` (added typed `listTraces` / `getTrace` helpers)
+  - `frontend/src/app/page.tsx` (added runtime diagnostics panel, trace loading state, trace selection, and trace detail rendering)
+  - `backend/tests/test_api_traces.py` (cleaned seeded test data used while validating the diagnostics flow)
+  - `scripts/ralph/prd.json` (marked US-105 complete)
+- **Learnings for future iterations:**
+  - UI stories that depend on freshly added backend endpoints need a real local service restart before browser verification; typecheck passing is not enough when the app was already running.
+  - The diagnostics rail works best as a session-adjacent panel: keep chat centered, diagnostics immediately beside it, and file editing further right so runtime state is visible without burying the conversation.
+---
