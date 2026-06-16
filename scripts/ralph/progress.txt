@@ -580,3 +580,16 @@ Started: 2026年 6月 4日 星期四 00时57分56秒 CST
   - UI stories that depend on freshly added backend endpoints need a real local service restart before browser verification; typecheck passing is not enough when the app was already running.
   - The diagnostics rail works best as a session-adjacent panel: keep chat centered, diagnostics immediately beside it, and file editing further right so runtime state is visible without burying the conversation.
 ---
+
+## 2026-06-17 隔离 / US-106
+- Added minimal user-level storage isolation with `X-User-ID` for sessions and editable file roots.
+- Files changed:
+  - `backend/user_state.py` (new — user id normalization and per-user root helpers)
+  - `backend/sessions_store.py` (user-scoped session paths)
+  - `backend/app.py` (reads `X-User-ID`, scopes sessions/files to `backend/data/users/{user_id}/...`)
+  - `backend/tests/test_user_isolation.py` (new — session and workspace isolation coverage)
+  - `scripts/ralph/prd.json` (marked US-106 complete)
+- **Learnings for future iterations:**
+  - Minimal multi-user isolation is easiest when storage path resolution is centralized in a dedicated helper module; route handlers and stores should consume that instead of assembling paths ad hoc.
+  - Shared assets like `backend/skills/` can stay global while mutable user-facing state moves under `backend/data/users/{user_id}/...`; that keeps the product model simple without blocking later SaaS-style growth.
+---
