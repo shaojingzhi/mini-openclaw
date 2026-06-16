@@ -43,6 +43,29 @@ export type SessionMessage = {
   content: string;
 };
 
+export type TraceSummary = {
+  trace_id: string;
+  session_id: string;
+  latency_ms: number | null;
+  final_status: string;
+  created_at: string | null;
+};
+
+export type TraceDetail = {
+  trace_id: string;
+  session_id: string;
+  user_id: string | null;
+  start_time: string;
+  end_time: string | null;
+  latency_ms: number | null;
+  model_name: string;
+  tool_calls: unknown[];
+  tool_failures: unknown[];
+  final_status: string;
+  token_usage: unknown;
+  events: Array<{ timestamp: string; kind: string; payload: Record<string, unknown> }>;
+};
+
 export type FilePayload = {
   path: string;
   content: string;
@@ -229,4 +252,27 @@ export async function getSession(sessionId: string): Promise<SessionMessage[]> {
 
   const body = (await response.json()) as { session_id: string; messages: SessionMessage[] };
   return body.messages;
+}
+
+export async function listTraces(): Promise<TraceSummary[]> {
+  const response = assertResponseOk(
+    await fetch(buildApiUrl("/api/traces"), {
+      cache: "no-store",
+    }),
+    "listTraces",
+  );
+
+  const body = (await response.json()) as { traces: TraceSummary[] };
+  return body.traces;
+}
+
+export async function getTrace(traceId: string): Promise<TraceDetail> {
+  const response = assertResponseOk(
+    await fetch(buildApiUrl(`/api/traces/${encodeURIComponent(traceId)}`), {
+      cache: "no-store",
+    }),
+    "getTrace",
+  );
+
+  return (await response.json()) as TraceDetail;
 }

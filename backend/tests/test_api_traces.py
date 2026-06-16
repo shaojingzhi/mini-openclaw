@@ -22,13 +22,11 @@ class ApiTracesTests(unittest.TestCase):
             with patch.object(tr_mod, "TRACES_DIR", traces_dir):
                 first = tr_mod.create_trace(session_id="alpha", model_name="gpt-5.4")
                 first["trace_id"] = "trace_a"
-                first["start_time"] = "2026-06-17T00:00:00+00:00"
                 tr_mod.finalize_trace(first, final_status="success")
                 tr_mod.save_trace(first)
 
                 second = tr_mod.create_trace(session_id="beta", model_name="gpt-5.4")
                 second["trace_id"] = "trace_b"
-                second["start_time"] = "2026-06-17T00:01:00+00:00"
                 tr_mod.finalize_trace(second, final_status="error")
                 tr_mod.save_trace(second)
 

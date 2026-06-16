@@ -21,7 +21,7 @@ import { Toaster, toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { getFile, getSession, listSessions, saveFile, streamChat, type ChatEvent, type ModelSettings, type SessionSummary } from "@/lib/api";
+import { getFile, getSession, getTrace, listSessions, listTraces, saveFile, streamChat, type ChatEvent, type ModelSettings, type SessionSummary, type TraceDetail, type TraceSummary } from "@/lib/api";
 
 const MonacoEditor = dynamic(() => import("@/components/monaco-markdown-editor").then((module) => module.MonacoMarkdownEditor), {
   ssr: false,
@@ -46,6 +46,7 @@ type ChatMessage =
   | { id: string; role: "assistant"; content: string; trace: TraceItem[] };
 
 type SessionStatus = "idle" | "loading" | "ready" | "error";
+type TraceStatus = "idle" | "loading" | "ready" | "error";
 
 const navItems: Array<{ id: NavId; label: string; icon: typeof Bot }> = [
   { id: "chat", label: "Chat", icon: Bot },
@@ -253,6 +254,10 @@ export default function Home() {
   const [activeSessionId, setActiveSessionId] = useState<string>("");
   const [messages, setMessages] = useState<Record<string, ChatMessage[]>>({});
   const [sessionStatus, setSessionStatus] = useState<Record<string, SessionStatus>>({});
+  const [traceSummaries, setTraceSummaries] = useState<TraceSummary[]>([]);
+  const [traceDetails, setTraceDetails] = useState<Record<string, TraceDetail>>({});
+  const [traceStatus, setTraceStatus] = useState<TraceStatus>("idle");
+  const [activeTraceId, setActiveTraceId] = useState<string>("");
   const [draft, setDraft] = useState("Ask the agent to inspect a skill, fetch a file, or explain the current session.");
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamError, setStreamError] = useState<string | null>(null);
@@ -264,6 +269,19 @@ export default function Home() {
   const [inspectorError, setInspectorError] = useState<string | null>(null);
   const [modelSettings, setModelSettings] = useState<ModelSettings>(defaultModelSettings);
   const initialInspectorLoad = useRef(false);
+
+  async function refreshTraces(preferredTraceId?: string) {
+    try {
+      setTraceStatus("loading");
+      const items = await listTraces();
+      setTraceSummaries(items);
+      setActiveTraceId((current) => preferredTraceId || current || items[0]?.trace_id || "");
+      setTraceStatus("ready");
+    } catch {
+      setTraceSummaries([]);
+      setTraceStatus("error");
+    }
+  }
   const stageHeadingRef = useRef<HTMLHeadingElement | null>(null);
   const composerRef = useRef<HTMLInputElement | null>(null);
 
@@ -377,6 +395,43 @@ export default function Home() {
   }, [activeNav]);
 
   useEffect(() => {
+    void refreshTraces();
+  }, []);
+
+  useEffect(() => {
+    if (!activeTraceId || traceDetails[activeTraceId]) {
+      return;
+    }
+
+    let mounted = true;
+    setTraceStatus("loading");
+
+    void getTrace(activeTraceId)
+      .then((detail) => {
+        if (!mounted) {
+          return;
+        }
+
+        setTraceDetails((current) => ({
+          ...current,
+          [activeTraceId]: detail,
+        }));
+        setTraceStatus("ready");
+      })
+      .catch(() => {
+        if (!mounted) {
+          return;
+        }
+
+        setTraceStatus("error");
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, [activeTraceId, traceDetails]);
+
+  useEffect(() => {
     if (!activeSessionId || messages[activeSessionId]) {
       return;
     }
@@ -457,6 +512,26 @@ export default function Home() {
         ? "Inspect skill definitions on the right while keeping the chat stage visible."
         : "Inspect and edit the workspace prompt files, memory, and local skills from one rail.";
   const selectedInspectorGroup = selectedInspectorFile?.group ?? "workspace";
+  const visibleTraceSummaries = useMemo(() => {
+    if (!activeSessionId) {
+      return traceSummaries;
+    }
+    const sessionMatches = traceSummaries.filter((trace) => trace.session_id === activeSessionId);
+    return sessionMatches.length > 0 ? sessionMatches : traceSummaries;
+  }, [activeSessionId, traceSummaries]);
+  const activeTrace = activeTraceId ? traceDetails[activeTraceId] ?? null : null;
+
+  useEffect(() => {
+    if (visibleTraceSummaries.length === 0) {
+      return;
+    }
+    setActiveTraceId((current) => {
+      if (current && visibleTraceSummaries.some((trace) => trace.trace_id === current)) {
+        return current;
+      }
+      return visibleTraceSummaries[0]?.trace_id ?? current;
+    });
+  }, [visibleTraceSummaries]);
 
   function focusChatWorkspace() {
     stageHeadingRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -469,6 +544,11 @@ export default function Home() {
     setActiveSessionId(sessionId);
     setActiveNav("chat");
     focusChatWorkspace();
+  }
+
+  function handleTraceSelect(traceId: string) {
+    setActiveTraceId(traceId);
+    setActiveNav("chat");
   }
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
@@ -551,6 +631,7 @@ export default function Home() {
       });
     } finally {
       setIsStreaming(false);
+      void refreshTraces();
     }
   }
 
@@ -756,6 +837,93 @@ export default function Home() {
                     </form>
                     <p className="mt-2 text-sm text-slate-500">Continue this session here.</p>
                     {streamError ? <p className="mt-3 text-sm text-rose-600">{streamError}</p> : null}
+                  </div>
+                </div>
+              </section>
+
+              <section className="flex min-h-[60vh] min-w-0 flex-col rounded-[20px] border border-slate-200/80 bg-[#f6f8fc] p-4 shadow-[0_12px_34px_rgba(15,23,42,0.05)] sm:p-5 lg:h-[calc(100vh-2.5rem)] lg:overflow-hidden lg:rounded-[22px]">
+                <div className="flex items-start justify-between gap-4 border-b border-slate-200/80 pb-5">
+                  <div>
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-400">Traces</p>
+                    <h2 className="mt-3 text-2xl font-semibold tracking-tight text-slate-950">Runtime diagnostics</h2>
+                    <p className="mt-2 text-sm leading-6 text-slate-500">Inspect chat runs, tool calls, failures, and latency without leaving the workspace.</p>
+                  </div>
+                  <div className="flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-500">
+                    <span className={['h-2 w-2 rounded-full', traceStatus === 'error' ? 'bg-rose-500' : traceStatus === 'loading' ? 'bg-amber-500' : 'bg-emerald-500'].join(' ')} />
+                    {visibleTraceSummaries.length} traces
+                  </div>
+                </div>
+
+                <div className="mt-5 grid min-h-0 flex-1 gap-4 2xl:grid-cols-[240px_minmax(0,1fr)]">
+                  <div className="flex min-h-[220px] max-h-[320px] flex-col rounded-[18px] border border-slate-200 bg-white p-3 shadow-sm 2xl:max-h-none">
+                    <div className="flex items-center justify-between gap-2 px-2 pb-3">
+                      <div className="flex items-center gap-2">
+                        <History className="h-4 w-4 text-slate-400" />
+                        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Runs</p>
+                      </div>
+                      <PanelRightOpen className="h-4 w-4 text-slate-300" />
+                    </div>
+                    <div className="min-h-0 flex-1 space-y-1 overflow-y-auto pr-1">
+                      {visibleTraceSummaries.length === 0 ? (
+                        <div className="rounded-xl border border-dashed border-slate-200 px-3 py-4 text-sm text-slate-500">No traces yet.</div>
+                      ) : (
+                        visibleTraceSummaries.map((trace) => {
+                          const active = trace.trace_id === activeTraceId;
+                          return (
+                            <button
+                              key={trace.trace_id}
+                              className={[
+                                'w-full rounded-xl border px-3 py-2.5 text-left transition',
+                                active ? 'border-slate-900 bg-slate-950 text-white' : 'border-transparent bg-slate-50 text-slate-700 hover:border-slate-200 hover:bg-slate-100',
+                              ].join(' ')}
+                              onClick={() => handleTraceSelect(trace.trace_id)}
+                              type="button"
+                            >
+                              <div className="flex items-center justify-between gap-3">
+                                <span className="truncate text-sm font-medium">{trace.trace_id}</span>
+                                <span className="text-[11px] uppercase tracking-[0.18em] text-slate-400">{trace.final_status}</span>
+                              </div>
+                              <p className={['mt-1 text-xs', active ? 'text-white/65' : 'text-slate-500'].join(' ')}>{trace.session_id}</p>
+                              <p className={['mt-1 text-xs', active ? 'text-white/50' : 'text-slate-400'].join(' ')}>{trace.latency_ms ?? 0} ms</p>
+                            </button>
+                          );
+                        })
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="flex min-h-[440px] min-w-0 flex-col rounded-[18px] border border-slate-200 bg-white shadow-sm 2xl:min-h-[520px]">
+                    <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <FileCode2 className="h-4 w-4 text-primary" />
+                          <p className="truncate text-sm font-semibold text-slate-900">{activeTrace?.trace_id ?? activeTraceId ?? 'Select a trace'}</p>
+                          <span className={["rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em]", activeTrace?.final_status === "error" ? "border-rose-200 bg-rose-50 text-rose-700" : activeTrace?.final_status === "success" ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-slate-200 bg-slate-50 text-slate-500"].join(" ")}>
+                            {activeTrace?.final_status ?? traceStatus}
+                          </span>
+                        </div>
+                        <p className="mt-1 truncate text-xs text-slate-500">{activeTrace?.session_id ?? 'No trace selected'}</p>
+                      </div>
+                    </div>
+                    <div className="min-h-0 flex-1 overflow-y-auto p-4">
+                      {activeTrace ? (
+                        <div className="space-y-3">
+                          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
+                            <p>Model: {activeTrace.model_name}</p>
+                            <p className="mt-1">Latency: {activeTrace.latency_ms ?? 0} ms</p>
+                            <p className="mt-1">Started: {formatTimestamp(activeTrace.start_time)}</p>
+                          </div>
+                          {activeTrace.events.map((event, index) => (
+                            <div key={`${activeTrace.trace_id}-${index}`} className="rounded-2xl border border-slate-200 bg-white p-4">
+                              <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-400">{event.kind}</p>
+                              <pre className="mt-2 overflow-x-auto whitespace-pre-wrap break-words text-xs leading-6 text-slate-600">{JSON.stringify(event.payload, null, 2)}</pre>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="rounded-2xl border border-dashed border-slate-200 p-6 text-sm text-slate-500">Pick a trace to inspect its events.</div>
+                      )}
+                    </div>
                   </div>
                 </div>
               </section>

@@ -466,8 +466,8 @@
         "Relevant frontend checks pass"
       ],
       "priority": 5,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Added a frontend runtime diagnostics panel wired to the new /api/traces endpoints. The UI now loads trace summaries, fetches trace details on selection, displays status/latency/model/event payloads, and was manually verified in the in-app browser after restarting the local dev services."
     },
     {
       "id": "US-106",
