@@ -26,6 +26,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+from backend.user_state import user_sessions_dir
+
 PROJECT_ROOT: Path = Path(__file__).resolve().parents[1]
 SESSIONS_DIR: Path = PROJECT_ROOT / "backend" / "sessions"
 
@@ -47,17 +49,19 @@ def _validate_session_name(name: str) -> None:
         )
 
 
-def _session_path(name: str) -> Path:
+def _session_path(name: str, user_id: str | None = None) -> Path:
     """Return the on-disk JSON path for ``name``.
 
     Reads ``SESSIONS_DIR`` from module globals each call so ``patch.object``
     in tests takes effect.
     """
     _validate_session_name(name)
-    return SESSIONS_DIR / f"{name}.json"
+    if user_id is None:
+        return SESSIONS_DIR / f"{name}.json"
+    return user_sessions_dir(user_id) / f"{name}.json"
 
 
-def load_session(name: str) -> list[dict[str, Any]]:
+def load_session(name: str, user_id: str | None = None) -> list[dict[str, Any]]:
     """Return the message list for ``name``.
 
     Non-existent sessions return ``[]`` (no exception). Corrupt JSON also
@@ -65,7 +69,7 @@ def load_session(name: str) -> list[dict[str, Any]]:
     that need to distinguish "empty" from "corrupt" should re-read the file
     directly.
     """
-    path = _session_path(name)
+    path = _session_path(name, user_id=user_id)
     if not path.exists():
         return []
     try:
@@ -81,7 +85,7 @@ def load_session(name: str) -> list[dict[str, Any]]:
     return data if isinstance(data, list) else []
 
 
-def append_message(name: str, message: dict[str, Any]) -> list[dict[str, Any]]:
+def append_message(name: str, message: dict[str, Any], user_id: str | None = None) -> list[dict[str, Any]]:
     """Append ``message`` to session ``name`` and return the new full list.
 
     Validates that ``message`` is a dict with a ``role`` in
@@ -98,10 +102,10 @@ def append_message(name: str, message: dict[str, Any]) -> list[dict[str, Any]]:
             f"message role must be one of {ALLOWED_ROLES}, got {role!r}"
         )
 
-    path = _session_path(name)
+    path = _session_path(name, user_id=user_id)
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    messages = load_session(name)
+    messages = load_session(name, user_id=user_id)
     messages.append(message)
 
     tmp = path.with_suffix(path.suffix + ".tmp")

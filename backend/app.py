@@ -13,7 +13,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sse_starlette import EventSourceResponse
@@ -21,6 +21,7 @@ from dotenv import load_dotenv
 
 from backend.graph.agent import build_agent
 from backend import sessions_store, traces_store
+from backend.user_state import normalize_user_id, user_memory_dir, user_sessions_dir, user_workspace_dir
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
@@ -80,9 +81,17 @@ def _resolve_model_name(request: ChatRequest) -> str:
     return request.model or os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
 
-def _resolve_allowed_file_path(raw_path: str) -> Path:
+def _allowed_file_roots_for_user(user_id: str) -> tuple[Path, ...]:
+    return (
+        user_memory_dir(user_id),
+        user_workspace_dir(user_id),
+        PROJECT_ROOT / "backend" / "skills",
+    )
+
+
+def _resolve_allowed_file_path(raw_path: str, *, user_id: str) -> Path:
     candidate = (PROJECT_ROOT / raw_path).resolve()
-    for root in ALLOWED_FILE_ROOTS:
+    for root in _allowed_file_roots_for_user(user_id):
         try:
             candidate.relative_to(root.resolve())
             return candidate
@@ -108,7 +117,7 @@ def _coerce_text(content: Any) -> str:
     return str(content) if content is not None else ""
 
 
-def _session_metadata(path: Path) -> dict[str, Any]:
+def _session_metadata(path: Path, *, user_id: str) -> dict[str, Any]:
     stat = path.stat()
     return {
         "name": path.stem,
@@ -116,7 +125,7 @@ def _session_metadata(path: Path) -> dict[str, Any]:
             stat.st_mtime,
             tz=timezone.utc,
         ).isoformat(),
-        "message_count": len(sessions_store.load_session(path.stem)),
+        "message_count": len(sessions_store.load_session(path.stem, user_id=user_id)),
     }
 
 
@@ -190,14 +199,16 @@ async def _stream_agent_events(
         yield "final", {"content": final_text}
 
 
-async def _chat_sse(request: ChatRequest) -> AsyncIterator[dict[str, str]]:
+async def _chat_sse(request: ChatRequest, *, user_id: str) -> AsyncIterator[dict[str, str]]:
     sessions_store.append_message(
         request.session_id,
         {"role": "user", "content": request.message},
+        user_id=user_id,
     )
     trace = traces_store.create_trace(
         session_id=request.session_id,
         model_name=_resolve_model_name(request),
+        user_id=user_id,
     )
     traces_store.append_event(trace, kind="user_message", payload={"content": request.message})
     agent = build_agent(
@@ -205,7 +216,7 @@ async def _chat_sse(request: ChatRequest) -> AsyncIterator[dict[str, str]]:
         base_url=request.base_url,
         model_name=request.model,
     )
-    payload = {"messages": sessions_store.load_session(request.session_id)}
+    payload = {"messages": sessions_store.load_session(request.session_id, user_id=user_id)}
     final_text = ""
 
     try:
@@ -239,6 +250,7 @@ async def _chat_sse(request: ChatRequest) -> AsyncIterator[dict[str, str]]:
     sessions_store.append_message(
         request.session_id,
         {"role": "assistant", "content": final_text},
+        user_id=user_id,
     )
     traces_store.save_trace(trace)
 
@@ -249,17 +261,20 @@ def health() -> dict[str, str]:
 
 
 @app.post("/api/chat", response_model=None)
-async def chat(request: ChatRequest) -> Any:
+async def chat(request: ChatRequest, x_user_id: str | None = Header(default=None)) -> Any:
+    user_id = normalize_user_id(x_user_id)
     if request.stream:
-        return EventSourceResponse(_chat_sse(request))
+        return EventSourceResponse(_chat_sse(request, user_id=user_id))
 
     sessions_store.append_message(
         request.session_id,
         {"role": "user", "content": request.message},
+        user_id=user_id,
     )
     trace = traces_store.create_trace(
         session_id=request.session_id,
         model_name=_resolve_model_name(request),
+        user_id=user_id,
     )
     traces_store.append_event(trace, kind="user_message", payload={"content": request.message})
     agent = build_agent(
@@ -270,7 +285,7 @@ async def chat(request: ChatRequest) -> Any:
     try:
         result = await _invoke_agent(
             agent,
-            {"messages": sessions_store.load_session(request.session_id)},
+            {"messages": sessions_store.load_session(request.session_id, user_id=user_id)},
         )
         final_text = _extract_final_reply(result)
         traces_store.append_event(trace, kind="final", payload={"content": final_text})
@@ -291,14 +306,16 @@ async def chat(request: ChatRequest) -> Any:
     sessions_store.append_message(
         request.session_id,
         {"role": "assistant", "content": final_text},
+        user_id=user_id,
     )
     traces_store.save_trace(trace)
     return {"reply": final_text, "trace_id": trace["trace_id"]}
 
 
 @app.get("/api/files")
-def get_file(path: str) -> dict[str, str]:
-    resolved_path = _resolve_allowed_file_path(path)
+def get_file(path: str, x_user_id: str | None = Header(default=None)) -> dict[str, str]:
+    user_id = normalize_user_id(x_user_id)
+    resolved_path = _resolve_allowed_file_path(path, user_id=user_id)
     try:
         content = resolved_path.read_text(encoding="utf-8")
     except FileNotFoundError as exc:
@@ -307,28 +324,32 @@ def get_file(path: str) -> dict[str, str]:
 
 
 @app.post("/api/files")
-def save_file(request: FileWriteRequest) -> dict[str, str]:
-    resolved_path = _resolve_allowed_file_path(request.path)
+def save_file(request: FileWriteRequest, x_user_id: str | None = Header(default=None)) -> dict[str, str]:
+    user_id = normalize_user_id(x_user_id)
+    resolved_path = _resolve_allowed_file_path(request.path, user_id=user_id)
     resolved_path.write_text(request.content, encoding="utf-8")
     return {"path": request.path, "content": request.content}
 
 
 @app.get("/api/sessions")
-def list_sessions() -> dict[str, list[dict[str, Any]]]:
-    if not sessions_store.SESSIONS_DIR.exists():
+def list_sessions(x_user_id: str | None = Header(default=None)) -> dict[str, list[dict[str, Any]]]:
+    user_id = normalize_user_id(x_user_id)
+    sessions_dir = sessions_store.SESSIONS_DIR if x_user_id is None else user_sessions_dir(user_id)
+    if not sessions_dir.exists():
         return {"sessions": []}
 
     sessions = [
-        _session_metadata(path)
-        for path in sorted(sessions_store.SESSIONS_DIR.glob("*.json"))
+        _session_metadata(path, user_id=user_id)
+        for path in sorted(sessions_dir.glob("*.json"))
         if path.is_file()
     ]
     return {"sessions": sessions}
 
 
 @app.get("/api/sessions/{session_id}")
-def get_session(session_id: str) -> dict[str, Any]:
-    messages = sessions_store.load_session(session_id)
+def get_session(session_id: str, x_user_id: str | None = Header(default=None)) -> dict[str, Any]:
+    user_id = normalize_user_id(x_user_id)
+    messages = sessions_store.load_session(session_id, user_id=user_id)
     return {"session_id": session_id, "messages": messages}
 
 

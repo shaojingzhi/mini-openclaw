@@ -482,8 +482,8 @@
         "Tests pass"
       ],
       "priority": 6,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Added minimal user isolation via the X-User-ID header. Chat session storage now resolves to backend/data/users/{user_id}/sessions, while file access resolves user-specific memory/workspace roots under backend/data/users/{user_id}/... with backend/skills remaining shared. Added integration tests proving separate users do not share session JSON or workspace file views."
     },
     {
       "id": "US-107",
