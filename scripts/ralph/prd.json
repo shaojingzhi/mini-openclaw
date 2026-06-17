@@ -497,8 +497,8 @@
         "Tests pass"
       ],
       "priority": 7,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Added `backend/user_locks.py` with an in-process async lock registry keyed by `user_id`, then routed chat session appends and mutable file saves through those locks in `backend/app.py`. Same-user writes now serialize while different users still run concurrently. Kept anonymous traffic compatible with the legacy shared file/session paths, and added focused concurrency tests for same-user session writes, same-user file writes, and cross-user parallelism."
     },
     {
       "id": "US-108",

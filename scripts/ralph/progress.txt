@@ -593,3 +593,17 @@ Started: 2026年 6月 4日 星期四 00时57分56秒 CST
   - Minimal multi-user isolation is easiest when storage path resolution is centralized in a dedicated helper module; route handlers and stores should consume that instead of assembling paths ad hoc.
   - Shared assets like `backend/skills/` can stay global while mutable user-facing state moves under `backend/data/users/{user_id}/...`; that keeps the product model simple without blocking later SaaS-style growth.
 ---
+
+## 2026-06-18 并发 / US-107
+- Added per-user async write serialization for chat sessions and mutable file saves.
+- Files changed:
+  - `backend/user_locks.py` (new — in-process `asyncio.Lock` registry keyed by `user_id`)
+  - `backend/app.py` (chat/file writes now flow through user-scoped async lock helpers; named users map `backend/memory/*` and `backend/workspace/*` into user roots while anonymous traffic keeps the legacy shared paths)
+  - `backend/sessions_store.py` (anonymous/default sessions remain on `backend/sessions`, named users stay isolated under `backend/data/users/{user_id}/sessions`)
+  - `backend/tests/test_user_locks.py` (new — same-user session serialization, same-user file serialization, and cross-user parallelism)
+  - `backend/tests/test_api_chat.py` / `backend/tests/test_api_files.py` (updated to reflect the user-scoped storage behavior without regressing anonymous flows)
+- **Learnings for future iterations:**
+  - Per-user locks work best one layer above disk helpers: keep `sessions_store` synchronous and wrap it at the API/service boundary so future call sites can opt in without rewriting the persistence module.
+  - Preserving the anonymous single-user path is important when a repo already has legacy frontends and tests; named-user isolation can be added incrementally without forcing every file/session caller to understand the new storage layout.
+  - Focused concurrency tests are much easier to reason about when they assert overlap/non-overlap directly instead of trying to infer safety only from final file contents.
+---
