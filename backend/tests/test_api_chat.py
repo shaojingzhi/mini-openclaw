@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 app_mod = importlib.import_module("backend.app")
 ss_mod = importlib.import_module("backend.sessions_store")
 tr_mod = importlib.import_module("backend.traces_store")
+us_mod = importlib.import_module("backend.user_state")
 
 
 class _StreamingAgent:
@@ -48,8 +49,10 @@ class ApiChatTests(unittest.TestCase):
     def test_streaming_chat_emits_sse_events_and_persists_messages(self) -> None:
         agent = _StreamingAgent()
         with tempfile.TemporaryDirectory() as tmp:
-            traces_dir = Path(tmp) / "traces"
-            with patch.object(ss_mod, "SESSIONS_DIR", Path(tmp)), patch.object(tr_mod, "TRACES_DIR", traces_dir), patch.object(
+            tmp_path = Path(tmp)
+            traces_dir = tmp_path / "traces"
+            data_users_dir = tmp_path / "users"
+            with patch.object(ss_mod, "SESSIONS_DIR", tmp_path), patch.object(us_mod, "DATA_USERS_DIR", data_users_dir), patch.object(tr_mod, "TRACES_DIR", traces_dir), patch.object(
                 app_mod, "build_agent", return_value=agent
             ):
                 client = TestClient(app_mod.app)
@@ -57,7 +60,7 @@ class ApiChatTests(unittest.TestCase):
                     "/api/chat",
                     json={"message": "say hello", "session_id": "main", "stream": True},
                 )
-                persisted = json.loads((Path(tmp) / "main.json").read_text(encoding="utf-8"))
+                persisted = ss_mod.load_session("main", user_id="anonymous")
                 trace_files = list(traces_dir.glob("*.json"))
                 trace = json.loads(trace_files[0].read_text(encoding="utf-8"))
 
@@ -90,8 +93,10 @@ class ApiChatTests(unittest.TestCase):
     def test_non_streaming_chat_returns_json_and_persists_messages(self) -> None:
         agent = _InvokeAgent()
         with tempfile.TemporaryDirectory() as tmp:
-            traces_dir = Path(tmp) / "traces"
-            with patch.object(ss_mod, "SESSIONS_DIR", Path(tmp)), patch.object(tr_mod, "TRACES_DIR", traces_dir), patch.object(
+            tmp_path = Path(tmp)
+            traces_dir = tmp_path / "traces"
+            data_users_dir = tmp_path / "users"
+            with patch.object(ss_mod, "SESSIONS_DIR", tmp_path), patch.object(us_mod, "DATA_USERS_DIR", data_users_dir), patch.object(tr_mod, "TRACES_DIR", traces_dir), patch.object(
                 app_mod, "build_agent", return_value=agent
             ):
                 client = TestClient(app_mod.app)
@@ -99,7 +104,7 @@ class ApiChatTests(unittest.TestCase):
                     "/api/chat",
                     json={"message": "say hello", "session_id": "main", "stream": False},
                 )
-                persisted = json.loads((Path(tmp) / "main.json").read_text(encoding="utf-8"))
+                persisted = ss_mod.load_session("main", user_id="anonymous")
                 trace_files = list(traces_dir.glob("*.json"))
                 trace = json.loads(trace_files[0].read_text(encoding="utf-8"))
 
@@ -127,8 +132,10 @@ class ApiChatTests(unittest.TestCase):
                 raise RuntimeError("provider timeout")
 
         with tempfile.TemporaryDirectory() as tmp:
-            traces_dir = Path(tmp) / "traces"
-            with patch.object(ss_mod, "SESSIONS_DIR", Path(tmp)), patch.object(tr_mod, "TRACES_DIR", traces_dir), patch.object(
+            tmp_path = Path(tmp)
+            traces_dir = tmp_path / "traces"
+            data_users_dir = tmp_path / "users"
+            with patch.object(ss_mod, "SESSIONS_DIR", tmp_path), patch.object(us_mod, "DATA_USERS_DIR", data_users_dir), patch.object(tr_mod, "TRACES_DIR", traces_dir), patch.object(
                 app_mod, "build_agent", return_value=_FailingAgent()
             ):
                 client = TestClient(app_mod.app)

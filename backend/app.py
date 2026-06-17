@@ -21,7 +21,8 @@ from dotenv import load_dotenv
 
 from backend.graph.agent import build_agent
 from backend import sessions_store, traces_store
-from backend.user_state import normalize_user_id, user_memory_dir, user_sessions_dir, user_workspace_dir
+from backend.user_locks import run_with_user_lock
+from backend.user_state import DEFAULT_USER_ID, normalize_user_id, user_memory_dir, user_sessions_dir, user_workspace_dir
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
@@ -82,6 +83,8 @@ def _resolve_model_name(request: ChatRequest) -> str:
 
 
 def _allowed_file_roots_for_user(user_id: str) -> tuple[Path, ...]:
+    if user_id == DEFAULT_USER_ID:
+        return ALLOWED_FILE_ROOTS
     return (
         user_memory_dir(user_id),
         user_workspace_dir(user_id),
@@ -89,8 +92,20 @@ def _allowed_file_roots_for_user(user_id: str) -> tuple[Path, ...]:
     )
 
 
+def _resolve_user_scoped_candidate(raw_path: str, *, user_id: str) -> Path:
+    raw = raw_path.strip()
+    if user_id != DEFAULT_USER_ID:
+        if raw.startswith("backend/memory/"):
+            suffix = Path(raw).relative_to("backend/memory")
+            return (user_memory_dir(user_id) / suffix).resolve()
+        if raw.startswith("backend/workspace/"):
+            suffix = Path(raw).relative_to("backend/workspace")
+            return (user_workspace_dir(user_id) / suffix).resolve()
+    return (PROJECT_ROOT / raw).resolve()
+
+
 def _resolve_allowed_file_path(raw_path: str, *, user_id: str) -> Path:
-    candidate = (PROJECT_ROOT / raw_path).resolve()
+    candidate = _resolve_user_scoped_candidate(raw_path, user_id=user_id)
     for root in _allowed_file_roots_for_user(user_id):
         try:
             candidate.relative_to(root.resolve())
@@ -199,8 +214,27 @@ async def _stream_agent_events(
         yield "final", {"content": final_text}
 
 
+async def _append_session_message(session_id: str, message: dict[str, Any], *, user_id: str) -> list[dict[str, Any]]:
+    return await run_with_user_lock(
+        user_id,
+        lambda: asyncio.to_thread(
+            sessions_store.append_message,
+            session_id,
+            message,
+            user_id=user_id,
+        ),
+    )
+
+
+async def _write_user_file(path: Path, content: str, *, user_id: str) -> None:
+    await run_with_user_lock(
+        user_id,
+        lambda: asyncio.to_thread(path.write_text, content, encoding="utf-8"),
+    )
+
+
 async def _chat_sse(request: ChatRequest, *, user_id: str) -> AsyncIterator[dict[str, str]]:
-    sessions_store.append_message(
+    await _append_session_message(
         request.session_id,
         {"role": "user", "content": request.message},
         user_id=user_id,
@@ -247,7 +281,7 @@ async def _chat_sse(request: ChatRequest, *, user_id: str) -> AsyncIterator[dict
             "data": json.dumps({"content": final_text}, ensure_ascii=False),
         }
 
-    sessions_store.append_message(
+    await _append_session_message(
         request.session_id,
         {"role": "assistant", "content": final_text},
         user_id=user_id,
@@ -266,7 +300,7 @@ async def chat(request: ChatRequest, x_user_id: str | None = Header(default=None
     if request.stream:
         return EventSourceResponse(_chat_sse(request, user_id=user_id))
 
-    sessions_store.append_message(
+    await _append_session_message(
         request.session_id,
         {"role": "user", "content": request.message},
         user_id=user_id,
@@ -303,7 +337,7 @@ async def chat(request: ChatRequest, x_user_id: str | None = Header(default=None
             status_code=502,
             detail=f"agent execution failed: {error_message}",
         ) from exc
-    sessions_store.append_message(
+    await _append_session_message(
         request.session_id,
         {"role": "assistant", "content": final_text},
         user_id=user_id,
@@ -324,10 +358,10 @@ def get_file(path: str, x_user_id: str | None = Header(default=None)) -> dict[st
 
 
 @app.post("/api/files")
-def save_file(request: FileWriteRequest, x_user_id: str | None = Header(default=None)) -> dict[str, str]:
+async def save_file(request: FileWriteRequest, x_user_id: str | None = Header(default=None)) -> dict[str, str]:
     user_id = normalize_user_id(x_user_id)
     resolved_path = _resolve_allowed_file_path(request.path, user_id=user_id)
-    resolved_path.write_text(request.content, encoding="utf-8")
+    await _write_user_file(resolved_path, request.content, user_id=user_id)
     return {"path": request.path, "content": request.content}
 
 

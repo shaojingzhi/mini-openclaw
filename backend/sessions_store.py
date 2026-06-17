@@ -26,7 +26,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from backend.user_state import user_sessions_dir
+from backend.user_state import DEFAULT_USER_ID, normalize_user_id, user_sessions_dir
 
 PROJECT_ROOT: Path = Path(__file__).resolve().parents[1]
 SESSIONS_DIR: Path = PROJECT_ROOT / "backend" / "sessions"
@@ -52,11 +52,14 @@ def _validate_session_name(name: str) -> None:
 def _session_path(name: str, user_id: str | None = None) -> Path:
     """Return the on-disk JSON path for ``name``.
 
-    Reads ``SESSIONS_DIR`` from module globals each call so ``patch.object``
-    in tests takes effect.
+    Anonymous/default traffic keeps using the legacy shared sessions directory so
+    existing single-user flows continue to work unchanged, while named users are
+    isolated under ``backend/data/users/{user_id}/sessions``. Reads
+    ``SESSIONS_DIR`` from module globals each call so ``patch.object`` in tests
+    takes effect.
     """
     _validate_session_name(name)
-    if user_id is None:
+    if user_id is None or normalize_user_id(user_id) == DEFAULT_USER_ID:
         return SESSIONS_DIR / f"{name}.json"
     return user_sessions_dir(user_id) / f"{name}.json"
 
