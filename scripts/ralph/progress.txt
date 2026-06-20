@@ -622,3 +622,17 @@ Started: 2026年 6月 4日 星期四 00时57分56秒 CST
   - One-shot retries should be reserved for recoverable failures before any streamed output is emitted; once the user has already seen partial output, silently replaying the run is more confusing than helpful.
   - Trace summaries need top-level failure metadata, not just raw event logs, otherwise the diagnostics panel has to reverse-engineer failure state from tool-result payloads.
 ---
+
+## 2026-06-18 回归 / US-109
+- Expanded boundary regression coverage and documented the failure matrix.
+- Files changed:
+  - `backend/tests/test_terminal.py` (invalid shell command now has explicit regression coverage)
+  - `backend/tests/test_api_files.py` (missing allowed file now asserts the frontend-visible `404 file not found` payload)
+  - `backend/tests/test_fetch_url.py`, `backend/tools/fetch_url.py` (HTML/Markdown parse failures now degrade to a friendly message)
+  - `backend/tests/test_search_knowledge_base.py`, `backend/tools/search_knowledge_base.py` (empty retrieval results covered; embedding setup now falls back to mock embeddings when optional OpenAI embedding extras are missing)
+  - `docs/failure-matrix.md` (new — repo-level matrix of failure modes, expected behavior, and test coverage)
+- **Learnings for future iterations:**
+  - Boundary stories are a good place to harden optional-dependency behavior; making the knowledge-search path degrade to mock embeddings turned a flaky environment dependency into a deterministic local default.
+  - For local-agent products, “frontend-visible failure payload” often just means “don’t return an empty spinner state” — lightweight `404`/friendly-message assertions carry a lot of value.
+  - A small failure matrix doc helps future stories stay honest about which edge cases are intentionally handled versus merely not yet tested.
+---
