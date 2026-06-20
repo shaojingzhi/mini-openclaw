@@ -61,8 +61,20 @@ const inspectorFiles: InspectorFile[] = [
   { label: "USER.md", path: "backend/workspace/USER.md", group: "workspace" },
   { label: "AGENTS.md", path: "backend/workspace/AGENTS.md", group: "workspace" },
   { label: "SKILLS_SNAPSHOT.md", path: "backend/workspace/SKILLS_SNAPSHOT.md", group: "workspace" },
+  { label: "INTERVIEW_DEMO.md", path: "backend/workspace/INTERVIEW_DEMO.md", group: "workspace" },
   { label: "get_weather / SKILL.md", path: "backend/skills/get_weather/SKILL.md", group: "skills" },
+  { label: "interview_answer_builder / SKILL.md", path: "backend/skills/interview_answer_builder/SKILL.md", group: "skills" },
+  { label: "resume_story_coach / SKILL.md", path: "backend/skills/resume_story_coach/SKILL.md", group: "skills" },
 ];
+
+const interviewDemoPrompts = [
+  "Summarize Mini-OpenClaw as a resume-ready AI agent project in 4 bullets.",
+  "Explain why the project uses transparent file-based memory instead of only hidden vector memory.",
+  "Pretend you are an interviewer. Ask me 5 hard follow-up questions about Mini-OpenClaw's evals, traces, and failure handling.",
+  "Turn this project into a 90-second interview answer that sounds practical instead of hype-driven.",
+  "Compare the engineering value of evals, observability, and user isolation in this project.",
+  "Rewrite Mini-OpenClaw into a STAR story about improving an AI agent from prototype to credible engineering project.",
+] as const;
 
 const MODEL_SETTINGS_STORAGE_KEY = "mini-openclaw-model-settings";
 const defaultModelSettings: ModelSettings = {
@@ -551,6 +563,12 @@ export default function Home() {
     setActiveNav("chat");
   }
 
+  function handleDemoPromptSelect(prompt: string) {
+    setDraft(prompt);
+    setActiveNav("chat");
+    focusChatWorkspace();
+  }
+
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -837,6 +855,37 @@ export default function Home() {
                     </form>
                     <p className="mt-2 text-sm text-slate-500">Continue this session here.</p>
                     {streamError ? <p className="mt-3 text-sm text-rose-600">{streamError}</p> : null}
+                  </div>
+
+                  <div className="rounded-[18px] border border-slate-200 bg-white p-4 lg:rounded-[20px]">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-400">Interview Demo</p>
+                        <h3 className="mt-2 text-base font-semibold text-slate-950">Seeded prompts</h3>
+                        <p className="mt-1 text-sm leading-6 text-slate-500">Use these to demo Mini-OpenClaw as an interview assistant, resume coach, and project storyteller.</p>
+                      </div>
+                      <Button
+                        className="h-9 rounded-xl px-3"
+                        onClick={() => setSelectedInspectorPath("backend/workspace/INTERVIEW_DEMO.md")}
+                        type="button"
+                        variant="outline"
+                      >
+                        <FileText className="mr-2 h-4 w-4" />
+                        Open sheet
+                      </Button>
+                    </div>
+                    <div className="mt-4 grid gap-2">
+                      {interviewDemoPrompts.map((prompt) => (
+                        <button
+                          key={prompt}
+                          className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-left text-sm leading-6 text-slate-700 transition hover:border-slate-300 hover:bg-slate-100"
+                          onClick={() => handleDemoPromptSelect(prompt)}
+                          type="button"
+                        >
+                          {prompt}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 </div>
               </section>
