@@ -513,8 +513,8 @@
         "Tests pass"
       ],
       "priority": 8,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Added `backend/runtime_errors.py` to classify runtime failures into the requested categories and decide whether a one-shot retry is safe. `/api/chat` now attaches categorized failure metadata to trace records and returns friendly JSON/SSE fallbacks instead of opaque errors, while traces persist `error_category`, `friendly_message`, `recoverable`, and `retry_count`. The frontend API layer now surfaces friendly backend error text, and the diagnostics panel shows error category, retries, and fallback messaging."
     },
     {
       "id": "US-109",

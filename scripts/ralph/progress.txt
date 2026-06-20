@@ -607,3 +607,18 @@ Started: 2026年 6月 4日 星期四 00时57分56秒 CST
   - Preserving the anonymous single-user path is important when a repo already has legacy frontends and tests; named-user isolation can be added incrementally without forcing every file/session caller to understand the new storage layout.
   - Focused concurrency tests are much easier to reason about when they assert overlap/non-overlap directly instead of trying to infer safety only from final file contents.
 ---
+
+## 2026-06-18 失败处理 / US-108
+- Added categorized runtime failures, friendly API fallbacks, and lightweight retry handling.
+- Files changed:
+  - `backend/runtime_errors.py` (new — maps runtime exceptions into `tool_timeout`, `tool_invalid_input`, `model_invalid_format`, `memory_read_failure`, `knowledge_retrieval_failure`, `max_iterations_exceeded` plus retry policy)
+  - `backend/app.py` (chat routes now classify failures, attach friendly payloads to JSON/SSE responses, retry recoverable pre-output failures once, and persist category metadata onto traces)
+  - `backend/traces_store.py` (stores top-level error metadata and retry count alongside events)
+  - `backend/tests/test_runtime_errors.py` (new — category and retry-policy coverage)
+  - `backend/tests/test_api_chat.py`, `backend/tests/test_api_traces.py`, `backend/tests/test_traces_store.py` (expanded failure-path and trace-metadata coverage)
+  - `frontend/src/lib/api.ts`, `frontend/src/app/page.tsx` (frontend now surfaces backend friendly error text and shows error category / retry info in diagnostics)
+- **Learnings for future iterations:**
+  - Centralizing runtime classification in its own module keeps route handlers readable and makes category drift much less likely as more tools are added.
+  - One-shot retries should be reserved for recoverable failures before any streamed output is emitted; once the user has already seen partial output, silently replaying the run is more confusing than helpful.
+  - Trace summaries need top-level failure metadata, not just raw event logs, otherwise the diagnostics panel has to reverse-engineer failure state from tool-result payloads.
+---
