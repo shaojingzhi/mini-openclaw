@@ -65,12 +65,19 @@ def _knowledge_files(knowledge_dir: Path) -> list[Path]:
 
 def _configure_settings() -> None:
     from llama_index.core import Settings
+    from llama_index.core.embeddings import MockEmbedding
     from llama_index.core.llms import MockLLM
 
     Settings.llm = MockLLM()
     if not os.getenv("OPENAI_API_KEY"):
-        from llama_index.core.embeddings import MockEmbedding
+        Settings.embed_model = MockEmbedding(embed_dim=384)
+        return
 
+    try:
+        from llama_index.embeddings.openai import OpenAIEmbedding
+
+        Settings.embed_model = OpenAIEmbedding()
+    except Exception:
         Settings.embed_model = MockEmbedding(embed_dim=384)
 
 

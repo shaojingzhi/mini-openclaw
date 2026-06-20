@@ -26,6 +26,11 @@ _REQUESTS_TOOL: RequestsGetTool = RequestsGetTool(
     allow_dangerous_requests=True,
 )
 
+PARSE_FAILURE_MESSAGE: str = (
+    "Fetched the page, but could not parse it into readable text. "
+    "Please retry with a simpler page or inspect the raw source manually."
+)
+
 
 def _clean_html(raw_html: str) -> str:
     """Strip ``<script>``/``<style>`` and convert the remainder to Markdown."""
@@ -57,7 +62,10 @@ def fetch_url(url: str) -> str:
     raw = _REQUESTS_TOOL.invoke({"url": url})
     if not isinstance(raw, str):
         raw = str(raw)
-    return _clean_html(raw)
+    try:
+        return _clean_html(raw)
+    except Exception:
+        return PARSE_FAILURE_MESSAGE
 
 
-__all__ = ["fetch_url"]
+__all__ = ["fetch_url", "PARSE_FAILURE_MESSAGE"]

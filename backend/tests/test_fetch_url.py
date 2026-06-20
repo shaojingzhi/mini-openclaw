@@ -5,7 +5,7 @@ from __future__ import annotations
 import unittest
 from unittest.mock import MagicMock, patch
 
-from backend.tools.fetch_url import _clean_html, fetch_url
+from backend.tools.fetch_url import PARSE_FAILURE_MESSAGE, _clean_html, fetch_url
 
 
 _FIXTURE_HTML = """
@@ -65,6 +65,17 @@ class FetchUrlToolTests(unittest.TestCase):
         self.assertNotIn("<style", out)
         # html2text strips trailing whitespace via our wrapper.
         self.assertFalse(out.endswith("\n"))
+
+    def test_fetch_url_returns_clear_message_when_parse_fails(self) -> None:
+        stub = MagicMock()
+        stub.invoke.return_value = "<html>huge response</html>"
+        with patch("backend.tools.fetch_url._REQUESTS_TOOL", stub), patch(
+            "backend.tools.fetch_url._clean_html",
+            side_effect=ValueError("parse failed"),
+        ):
+            out = fetch_url.invoke({"url": "https://example.invalid/page"})
+
+        self.assertEqual(out, PARSE_FAILURE_MESSAGE)
 
 
 if __name__ == "__main__":  # pragma: no cover

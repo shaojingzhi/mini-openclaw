@@ -12,6 +12,7 @@ import importlib
 
 from backend.tools.search_knowledge_base import (
     EMPTY_KB_MESSAGE,
+    NO_RESULTS_MESSAGE,
     clear_cache,
     search_knowledge_base,
 )
@@ -93,6 +94,16 @@ class SearchKnowledgeBaseSeededTests(unittest.TestCase):
         clear_cache()
         out = search_knowledge_base.invoke({"query": "marshmallow"})
         self.assertIn("notes.md", out)
+
+    def test_empty_retrieval_results_return_clear_message(self) -> None:
+        class _NoResultsRetriever:
+            def retrieve(self, query: str):
+                return []
+
+        with patch.object(sk_mod, "_get_retriever", return_value=_NoResultsRetriever()):
+            out = search_knowledge_base.invoke({"query": "unknown topic"})
+
+        self.assertEqual(out, NO_RESULTS_MESSAGE)
 
 
 if __name__ == "__main__":  # pragma: no cover

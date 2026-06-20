@@ -99,6 +99,28 @@ class ApiFilesTests(unittest.TestCase):
         self.assertEqual(traversal_response.status_code, 403)
         self.assertEqual(outside_response.status_code, 403)
 
+    def test_missing_allowed_file_returns_404(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp)
+            memory_dir = project_root / "backend" / "memory"
+            workspace_dir = project_root / "backend" / "workspace"
+            skills_dir = project_root / "backend" / "skills"
+            for directory in (memory_dir, workspace_dir, skills_dir):
+                directory.mkdir(parents=True, exist_ok=True)
+
+            with patch.object(app_mod, "PROJECT_ROOT", project_root), patch.object(
+                app_mod,
+                "ALLOWED_FILE_ROOTS",
+                (memory_dir, workspace_dir, skills_dir),
+            ):
+                client = TestClient(app_mod.app)
+                response = client.get(
+                    "/api/files", params={"path": "backend/workspace/MISSING.md"}
+                )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json()["detail"], "file not found")
+
 
 if __name__ == "__main__":
     unittest.main()

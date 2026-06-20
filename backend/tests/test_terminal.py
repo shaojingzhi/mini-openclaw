@@ -38,6 +38,13 @@ class TerminalToolInvocationTests(unittest.TestCase):
         out = terminal.invoke({"command": "echo hello-mini-openclaw"})
         self.assertIn("hello-mini-openclaw", out)
 
+    def test_invalid_command_returns_shell_error_output(self) -> None:
+        out = terminal.invoke({"command": "definitely_not_a_real_command_12345"})
+        lowered = out.lower()
+        self.assertTrue(
+            "not found" in lowered or "no such file" in lowered or "is not recognized" in lowered
+        )
+
     def test_blacklisted_command_is_refused_without_executing(self) -> None:
         out = terminal.invoke({"command": "rm -rf /"})
         self.assertEqual(out, BLOCKED_MESSAGE)
