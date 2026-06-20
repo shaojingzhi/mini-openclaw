@@ -543,8 +543,8 @@
         "Relevant checks pass"
       ],
       "priority": 10,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Added a focused interview-prep knowledge pack under `backend/knowledge/interview/`, two dedicated interview skills, a workspace prompt sheet (`INTERVIEW_DEMO.md`), and a frontend Interview Demo prompt launcher. Also documented the demo workflow and screenshot checklist in `docs/interview-demo-pack.md`, regenerated `SKILLS_SNAPSHOT.md`, and exposed the demo assets directly in the inspector so the project can be shown as a concrete hiring-facing assistant instead of a generic chat shell."
     }
   ]
 }

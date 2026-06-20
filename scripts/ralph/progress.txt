@@ -636,3 +636,18 @@ Started: 2026年 6月 4日 星期四 00时57分56秒 CST
   - For local-agent products, “frontend-visible failure payload” often just means “don’t return an empty spinner state” — lightweight `404`/friendly-message assertions carry a lot of value.
   - A small failure matrix doc helps future stories stay honest about which edge cases are intentionally handled versus merely not yet tested.
 ---
+
+## 2026-06-18 演示包 / US-110
+- Added a hiring-facing interview assistant vertical demo pack.
+- Files changed:
+  - `backend/knowledge/interview/interview_demo_pack.md`, `backend/knowledge/interview/interview_question_bank.md` (focused interview-prep knowledge pack)
+  - `backend/skills/interview_answer_builder/SKILL.md`, `backend/skills/resume_story_coach/SKILL.md` (dedicated interview/resume skills)
+  - `backend/workspace/INTERVIEW_DEMO.md` (seeded demo prompts, live flow, screenshot checklist)
+  - `backend/workspace/SKILLS_SNAPSHOT.md` (regenerated to include the new interview skills)
+  - `docs/interview-demo-pack.md` (demo workflow and screenshot checklist)
+  - `frontend/src/app/page.tsx` (Interview Demo prompt launcher plus inspector access to the new assets)
+- **Learnings for future iterations:**
+  - A vertical demo becomes much more believable when the knowledge, skills, prompts, and UI entry points all exist in the repo instead of living only in a spoken demo script.
+  - Frontend “seed prompt” affordances are a cheap way to make a demo repeatable; they reduce setup friction and help reviewers discover the intended scenario quickly.
+  - Regenerating `SKILLS_SNAPSHOT.md` is part of shipping any new skill content, not just core agent features; otherwise the prompt surface can drift from what the repo actually exposes.
+---
