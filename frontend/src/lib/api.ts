@@ -48,6 +48,7 @@ export type TraceSummary = {
   session_id: string;
   latency_ms: number | null;
   final_status: string;
+  error_category: string | null;
   created_at: string | null;
 };
 
@@ -63,6 +64,11 @@ export type TraceDetail = {
   tool_failures: unknown[];
   final_status: string;
   token_usage: unknown;
+  error_category: string | null;
+  error_message: string | null;
+  friendly_message: string | null;
+  recoverable: boolean | null;
+  retry_count: number;
   events: Array<{ timestamp: string; kind: string; payload: Record<string, unknown> }>;
 };
 
@@ -73,17 +79,47 @@ export type FilePayload = {
 
 type ChatEventPayload = {
   content?: unknown;
+  error_category?: unknown;
   input?: unknown;
   name?: unknown;
+};
+
+type ApiErrorBody = {
+  detail?: unknown;
+  error_category?: unknown;
+  error_message?: unknown;
+  friendly_message?: unknown;
+  recoverable?: unknown;
+  trace_id?: unknown;
 };
 
 function buildApiUrl(path: string): string {
   return new URL(path, API_BASE_URL).toString();
 }
 
-function assertResponseOk(response: Response, action: string): Response {
+async function assertResponseOk(response: Response, action: string): Promise<Response> {
   if (!response.ok) {
-    throw new Error(`${action} failed with status ${response.status}`);
+    let message = `${action} failed with status ${response.status}`;
+
+    try {
+      const payload = (await response.clone().json()) as ApiErrorBody;
+      if (typeof payload.friendly_message === "string" && payload.friendly_message.trim()) {
+        message = payload.friendly_message;
+      } else if (typeof payload.detail === "string" && payload.detail.trim()) {
+        message = payload.detail;
+      }
+    } catch {
+      try {
+        const text = await response.clone().text();
+        if (text.trim()) {
+          message = text.trim();
+        }
+      } catch {
+        message = `${action} failed with status ${response.status}`;
+      }
+    }
+
+    throw new Error(message);
   }
 
   return response;
@@ -151,7 +187,7 @@ export async function* streamChat(
   sessionId: string,
   settings?: Partial<ModelSettings>,
 ): AsyncGenerator<ChatEvent, void, undefined> {
-  const response = assertResponseOk(
+  const response = await assertResponseOk(
     await fetch(buildApiUrl("/api/chat"), {
       method: "POST",
       headers: {
@@ -205,7 +241,7 @@ export async function* streamChat(
 }
 
 export async function getFile(path: string): Promise<FilePayload> {
-  const response = assertResponseOk(
+  const response = await assertResponseOk(
     await fetch(`${buildApiUrl("/api/files")}?path=${encodeURIComponent(path)}`, {
       cache: "no-store",
     }),
@@ -216,7 +252,7 @@ export async function getFile(path: string): Promise<FilePayload> {
 }
 
 export async function saveFile(path: string, content: string): Promise<FilePayload> {
-  const response = assertResponseOk(
+  const response = await assertResponseOk(
     await fetch(buildApiUrl("/api/files"), {
       method: "POST",
       headers: {
@@ -231,7 +267,7 @@ export async function saveFile(path: string, content: string): Promise<FilePaylo
 }
 
 export async function listSessions(): Promise<SessionSummary[]> {
-  const response = assertResponseOk(
+  const response = await assertResponseOk(
     await fetch(buildApiUrl("/api/sessions"), {
       cache: "no-store",
     }),
@@ -243,7 +279,7 @@ export async function listSessions(): Promise<SessionSummary[]> {
 }
 
 export async function getSession(sessionId: string): Promise<SessionMessage[]> {
-  const response = assertResponseOk(
+  const response = await assertResponseOk(
     await fetch(buildApiUrl(`/api/sessions/${encodeURIComponent(sessionId)}`), {
       cache: "no-store",
     }),
@@ -255,7 +291,7 @@ export async function getSession(sessionId: string): Promise<SessionMessage[]> {
 }
 
 export async function listTraces(): Promise<TraceSummary[]> {
-  const response = assertResponseOk(
+  const response = await assertResponseOk(
     await fetch(buildApiUrl("/api/traces"), {
       cache: "no-store",
     }),
@@ -267,7 +303,7 @@ export async function listTraces(): Promise<TraceSummary[]> {
 }
 
 export async function getTrace(traceId: string): Promise<TraceDetail> {
-  const response = assertResponseOk(
+  const response = await assertResponseOk(
     await fetch(buildApiUrl(`/api/traces/${encodeURIComponent(traceId)}`), {
       cache: "no-store",
     }),

@@ -908,10 +908,13 @@ export default function Home() {
                     <div className="min-h-0 flex-1 overflow-y-auto p-4">
                       {activeTrace ? (
                         <div className="space-y-3">
-                          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
+                        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
                             <p>Model: {activeTrace.model_name}</p>
                             <p className="mt-1">Latency: {activeTrace.latency_ms ?? 0} ms</p>
                             <p className="mt-1">Started: {formatTimestamp(activeTrace.start_time)}</p>
+                            {activeTrace.error_category ? <p className="mt-1">Error category: {activeTrace.error_category}</p> : null}
+                            {activeTrace.retry_count > 0 ? <p className="mt-1">Retries: {activeTrace.retry_count}</p> : null}
+                            {activeTrace.friendly_message ? <p className="mt-2 text-rose-700">{activeTrace.friendly_message}</p> : null}
                           </div>
                           {activeTrace.events.map((event, index) => (
                             <div key={`${activeTrace.trace_id}-${index}`} className="rounded-2xl border border-slate-200 bg-white p-4">

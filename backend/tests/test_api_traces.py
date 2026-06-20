@@ -37,6 +37,7 @@ class ApiTracesTests(unittest.TestCase):
         body = response.json()
         self.assertEqual([item["trace_id"] for item in body["traces"]], ["trace_b", "trace_a"])
         self.assertEqual(body["traces"][0]["final_status"], "error")
+        self.assertIsNone(body["traces"][0]["error_category"])
         self.assertEqual(body["traces"][1]["final_status"], "success")
 
     def test_get_trace_returns_full_payload(self) -> None:

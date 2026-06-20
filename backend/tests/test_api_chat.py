@@ -45,6 +45,17 @@ class _InvokeAgent:
         return {"messages": [{"role": "assistant", "content": "plain reply"}]}
 
 
+class _FlakyRecoverableAgent:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def ainvoke(self, payload):
+        self.calls += 1
+        if self.calls == 1:
+            raise TimeoutError("tool timed out while fetching data")
+        return {"messages": [{"role": "assistant", "content": "recovered reply"}]}
+
+
 class ApiChatTests(unittest.TestCase):
     def test_streaming_chat_emits_sse_events_and_persists_messages(self) -> None:
         agent = _StreamingAgent()
@@ -126,7 +137,7 @@ class ApiChatTests(unittest.TestCase):
         self.assertEqual(trace["final_status"], "success")
         self.assertEqual(trace["events"][-1]["kind"], "final")
 
-    def test_non_streaming_chat_failure_persists_error_trace(self) -> None:
+    def test_non_streaming_chat_failure_returns_categorized_payload(self) -> None:
         class _FailingAgent:
             async def ainvoke(self, payload):
                 raise RuntimeError("provider timeout")
@@ -147,9 +158,66 @@ class ApiChatTests(unittest.TestCase):
                 trace = json.loads(trace_files[0].read_text(encoding="utf-8"))
 
         self.assertEqual(response.status_code, 502)
-        self.assertIn("agent execution failed", response.json()["detail"])
+        self.assertEqual(response.json()["error_category"], "tool_timeout")
+        self.assertTrue(response.json()["recoverable"])
+        self.assertIn("timeout", response.json()["error_message"])
         self.assertEqual(trace["final_status"], "error")
+        self.assertEqual(trace["error_category"], "tool_timeout")
         self.assertEqual(trace["tool_failures"][0]["name"], "agent_error")
+        self.assertEqual(trace["tool_failures"][0]["category"], "tool_timeout")
+
+    def test_non_streaming_chat_retries_recoverable_failure_once(self) -> None:
+        agent = _FlakyRecoverableAgent()
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            traces_dir = tmp_path / "traces"
+            data_users_dir = tmp_path / "users"
+            with patch.object(ss_mod, "SESSIONS_DIR", tmp_path), patch.object(us_mod, "DATA_USERS_DIR", data_users_dir), patch.object(tr_mod, "TRACES_DIR", traces_dir), patch.object(
+                app_mod, "build_agent", return_value=agent
+            ):
+                client = TestClient(app_mod.app)
+                response = client.post(
+                    "/api/chat",
+                    json={"message": "say hello", "session_id": "main", "stream": False},
+                )
+                trace_files = list(traces_dir.glob("*.json"))
+                trace = json.loads(trace_files[0].read_text(encoding="utf-8"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["reply"], "recovered reply")
+        self.assertEqual(agent.calls, 2)
+        self.assertEqual(trace["final_status"], "success")
+        self.assertEqual(trace["retry_count"], 1)
+        self.assertEqual(trace["events"][-2]["kind"], "runtime_retry")
+
+    def test_streaming_chat_emits_friendly_final_on_failure(self) -> None:
+        class _FailingStreamAgent:
+            async def astream_events(self, payload, version="v2"):
+                if False:
+                    yield {"type": "thought", "data": {"content": "unused"}}
+                raise RuntimeError("knowledge retrieval failed: vector index unavailable")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            traces_dir = tmp_path / "traces"
+            data_users_dir = tmp_path / "users"
+            with patch.object(ss_mod, "SESSIONS_DIR", tmp_path), patch.object(us_mod, "DATA_USERS_DIR", data_users_dir), patch.object(tr_mod, "TRACES_DIR", traces_dir), patch.object(
+                app_mod, "build_agent", return_value=_FailingStreamAgent()
+            ):
+                client = TestClient(app_mod.app)
+                response = client.post(
+                    "/api/chat",
+                    json={"message": "say hello", "session_id": "main", "stream": True},
+                )
+                trace_files = list(traces_dir.glob("*.json"))
+                trace = json.loads(trace_files[0].read_text(encoding="utf-8"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("event: tool_result", response.text)
+        self.assertIn("knowledge_retrieval_failure", response.text)
+        self.assertIn("temporarily unavailable", response.text)
+        self.assertEqual(trace["final_status"], "error")
+        self.assertEqual(trace["error_category"], "knowledge_retrieval_failure")
 
 
 if __name__ == "__main__":

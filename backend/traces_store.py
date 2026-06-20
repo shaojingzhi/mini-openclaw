@@ -43,6 +43,11 @@ def create_trace(
         "final_status": "running",
         "token_usage": None,
         "events": [],
+        "error_category": None,
+        "error_message": None,
+        "friendly_message": None,
+        "recoverable": None,
+        "retry_count": 0,
     }
 
 
@@ -58,6 +63,20 @@ def append_event(trace: dict[str, Any], *, kind: str, payload: dict[str, Any]) -
         trace.setdefault("tool_calls", []).append(payload)
     if kind == "tool_result" and payload.get("name") == "agent_error":
         trace.setdefault("tool_failures", []).append(payload)
+
+
+def record_error(
+    trace: dict[str, Any],
+    *,
+    category: str,
+    detail: str,
+    friendly_message: str,
+    recoverable: bool,
+) -> None:
+    trace["error_category"] = category
+    trace["error_message"] = detail
+    trace["friendly_message"] = friendly_message
+    trace["recoverable"] = recoverable
 
 
 def finalize_trace(

@@ -18,9 +18,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sse_starlette import EventSourceResponse
 from dotenv import load_dotenv
+from fastapi.responses import JSONResponse
 
 from backend.graph.agent import build_agent
 from backend import sessions_store, traces_store
+from backend.runtime_errors import classify_runtime_failure, runtime_error_payload, should_retry_runtime_failure
 from backend.user_locks import run_with_user_lock
 from backend.user_state import DEFAULT_USER_ID, normalize_user_id, user_memory_dir, user_sessions_dir, user_workspace_dir
 
@@ -162,6 +164,19 @@ def _agent_error_message(error: Exception) -> str:
     return str(error).strip() or error.__class__.__name__
 
 
+def _record_retry(trace: dict[str, Any], *, category: str, detail: str) -> None:
+    trace["retry_count"] = int(trace.get("retry_count", 0)) + 1
+    traces_store.append_event(
+        trace,
+        kind="runtime_retry",
+        payload={
+            "category": category,
+            "detail": detail,
+            "attempt": trace["retry_count"],
+        },
+    )
+
+
 async def _invoke_agent(agent: Any, payload: dict[str, Any]) -> Any:
     if hasattr(agent, "ainvoke"):
         return await agent.ainvoke(payload)
@@ -252,34 +267,62 @@ async def _chat_sse(request: ChatRequest, *, user_id: str) -> AsyncIterator[dict
     )
     payload = {"messages": sessions_store.load_session(request.session_id, user_id=user_id)}
     final_text = ""
+    streamed_output_started = False
 
-    try:
-        async for event_type, event_payload in _stream_agent_events(agent, payload):
-            traces_store.append_event(trace, kind=event_type, payload=event_payload)
-            if event_type == "final":
-                final_text = _coerce_text(event_payload.get("content", ""))
-            yield {
-                "event": event_type,
-                "data": json.dumps(event_payload, ensure_ascii=False),
+    while True:
+        try:
+            async for event_type, event_payload in _stream_agent_events(agent, payload):
+                streamed_output_started = True
+                traces_store.append_event(trace, kind=event_type, payload=event_payload)
+                if event_type == "final":
+                    final_text = _coerce_text(event_payload.get("content", ""))
+                yield {
+                    "event": event_type,
+                    "data": json.dumps(event_payload, ensure_ascii=False),
+                }
+            traces_store.finalize_trace(trace, final_status="success")
+            break
+        except Exception as exc:
+            failure = classify_runtime_failure(exc)
+            traces_store.record_error(
+                trace,
+                category=failure.category,
+                detail=failure.detail,
+                friendly_message=failure.friendly_message,
+                recoverable=failure.recoverable,
+            )
+            if should_retry_runtime_failure(
+                failure,
+                retry_count=int(trace.get("retry_count", 0)),
+                streamed_output_started=streamed_output_started,
+            ):
+                _record_retry(trace, category=failure.category, detail=failure.detail)
+                continue
+
+            final_text = failure.friendly_message
+            error_payload = {
+                "name": "agent_error",
+                "category": failure.category,
+                "content": failure.friendly_message,
+                "detail": failure.detail,
+                "recoverable": failure.recoverable,
             }
-        traces_store.finalize_trace(trace, final_status="success")
-    except Exception as exc:
-        final_text = "The assistant could not complete the request."
-        error_payload = {
-            "name": "agent_error",
-            "content": _agent_error_message(exc),
-        }
-        traces_store.append_event(trace, kind="tool_result", payload=error_payload)
-        traces_store.append_event(trace, kind="final", payload={"content": final_text})
-        traces_store.finalize_trace(trace, final_status="error")
-        yield {
-            "event": "tool_result",
-            "data": json.dumps(error_payload, ensure_ascii=False),
-        }
-        yield {
-            "event": "final",
-            "data": json.dumps({"content": final_text}, ensure_ascii=False),
-        }
+            traces_store.append_event(trace, kind="tool_result", payload=error_payload)
+            traces_store.append_event(
+                trace,
+                kind="final",
+                payload={"content": final_text, "error_category": failure.category},
+            )
+            traces_store.finalize_trace(trace, final_status="error")
+            yield {
+                "event": "tool_result",
+                "data": json.dumps(error_payload, ensure_ascii=False),
+            }
+            yield {
+                "event": "final",
+                "data": json.dumps({"content": final_text, "error_category": failure.category}, ensure_ascii=False),
+            }
+            break
 
     await _append_session_message(
         request.session_id,
@@ -316,27 +359,50 @@ async def chat(request: ChatRequest, x_user_id: str | None = Header(default=None
         base_url=request.base_url,
         model_name=request.model,
     )
-    try:
-        result = await _invoke_agent(
-            agent,
-            {"messages": sessions_store.load_session(request.session_id, user_id=user_id)},
-        )
-        final_text = _extract_final_reply(result)
-        traces_store.append_event(trace, kind="final", payload={"content": final_text})
-        traces_store.finalize_trace(trace, final_status="success")
-    except Exception as exc:
-        error_message = _agent_error_message(exc)
-        traces_store.append_event(
-            trace,
-            kind="tool_result",
-            payload={"name": "agent_error", "content": error_message},
-        )
-        traces_store.finalize_trace(trace, final_status="error")
-        traces_store.save_trace(trace)
-        raise HTTPException(
-            status_code=502,
-            detail=f"agent execution failed: {error_message}",
-        ) from exc
+    while True:
+        try:
+            result = await _invoke_agent(
+                agent,
+                {"messages": sessions_store.load_session(request.session_id, user_id=user_id)},
+            )
+            final_text = _extract_final_reply(result)
+            traces_store.append_event(trace, kind="final", payload={"content": final_text})
+            traces_store.finalize_trace(trace, final_status="success")
+            break
+        except Exception as exc:
+            failure = classify_runtime_failure(exc)
+            traces_store.record_error(
+                trace,
+                category=failure.category,
+                detail=failure.detail,
+                friendly_message=failure.friendly_message,
+                recoverable=failure.recoverable,
+            )
+            if should_retry_runtime_failure(
+                failure,
+                retry_count=int(trace.get("retry_count", 0)),
+                streamed_output_started=False,
+            ):
+                _record_retry(trace, category=failure.category, detail=failure.detail)
+                continue
+
+            traces_store.append_event(
+                trace,
+                kind="tool_result",
+                payload={
+                    "name": "agent_error",
+                    "category": failure.category,
+                    "content": failure.friendly_message,
+                    "detail": failure.detail,
+                    "recoverable": failure.recoverable,
+                },
+            )
+            traces_store.finalize_trace(trace, final_status="error")
+            traces_store.save_trace(trace)
+            return JSONResponse(
+                status_code=502,
+                content=runtime_error_payload(failure, trace_id=str(trace["trace_id"])),
+            )
     await _append_session_message(
         request.session_id,
         {"role": "assistant", "content": final_text},
@@ -405,6 +471,7 @@ def list_traces() -> dict[str, list[dict[str, Any]]]:
                 "session_id": trace.get("session_id"),
                 "latency_ms": trace.get("latency_ms"),
                 "final_status": trace.get("final_status"),
+                "error_category": trace.get("error_category"),
                 "created_at": trace.get("start_time"),
             }
         )

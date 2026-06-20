@@ -39,6 +39,19 @@ class TracesStoreTests(unittest.TestCase):
         )
         self.assertEqual(len(trace["tool_failures"]), 1)
 
+    def test_record_error_sets_top_level_fields(self) -> None:
+        trace = tr_mod.create_trace(session_id="main", model_name="gpt-5.4")
+        tr_mod.record_error(
+            trace,
+            category="tool_timeout",
+            detail="tool timed out",
+            friendly_message="A local tool timed out before it could finish. Please try again.",
+            recoverable=True,
+        )
+        self.assertEqual(trace["error_category"], "tool_timeout")
+        self.assertEqual(trace["error_message"], "tool timed out")
+        self.assertTrue(trace["recoverable"])
+
 
 if __name__ == "__main__":
     unittest.main()
