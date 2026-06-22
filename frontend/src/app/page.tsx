@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Bot,
   ChevronDown,
+  ChevronUp,
   FileText,
   FileCode2,
   FolderTree,
@@ -47,6 +48,17 @@ type ChatMessage =
 
 type SessionStatus = "idle" | "loading" | "ready" | "error";
 type TraceStatus = "idle" | "loading" | "ready" | "error";
+type RightPanelTab = "inspector" | "traces" | "settings";
+type RailPanelId = "inspector" | "traces" | "settings";
+type LayoutSizeKey =
+  | "sidebarWidth"
+  | "railWidth"
+  | "inspectorListWidth"
+  | "tracesListWidth"
+  | "inspectorHeight"
+  | "tracesHeight";
+type LayoutSizes = Record<LayoutSizeKey, number>;
+type CollapsedPanels = Record<RailPanelId, boolean>;
 
 const navItems: Array<{ id: NavId; label: string; icon: typeof Bot }> = [
   { id: "chat", label: "Chat", icon: Bot },
@@ -77,11 +89,25 @@ const interviewDemoPrompts = [
 ] as const;
 
 const MODEL_SETTINGS_STORAGE_KEY = "mini-openclaw-model-settings";
+const LAYOUT_SIZES_STORAGE_KEY = "mini-openclaw-layout-sizes";
 const defaultModelSettings: ModelSettings = {
   apiKey: "",
   baseUrl: "https://api.codexzh.com/v1",
   model: "gpt-5.4",
 };
+const defaultLayoutSizes: LayoutSizes = {
+  sidebarWidth: 300,
+  railWidth: 440,
+  inspectorListWidth: 220,
+  tracesListWidth: 220,
+  inspectorHeight: 320,
+  tracesHeight: 280,
+};
+
+const railPanelMinHeight = 180;
+const railHandleSize = 16;
+const collapsedPanelHeight = 76;
+const settingsPanelDefaultHeight = 360;
 
 const starterMessages: ChatMessage[] = [
   {
@@ -160,6 +186,27 @@ function getInspectorGroupLabel(group: InspectorGroup): string {
   }
 
   return "Skills";
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
+}
+
+function coerceLayoutSizes(raw: unknown): LayoutSizes {
+  if (!raw || typeof raw !== "object") {
+    return defaultLayoutSizes;
+  }
+
+  const candidate = raw as Partial<Record<LayoutSizeKey, unknown>>;
+
+  return {
+    sidebarWidth: typeof candidate.sidebarWidth === "number" ? candidate.sidebarWidth : defaultLayoutSizes.sidebarWidth,
+    railWidth: typeof candidate.railWidth === "number" ? candidate.railWidth : defaultLayoutSizes.railWidth,
+    inspectorListWidth: typeof candidate.inspectorListWidth === "number" ? candidate.inspectorListWidth : defaultLayoutSizes.inspectorListWidth,
+    tracesListWidth: typeof candidate.tracesListWidth === "number" ? candidate.tracesListWidth : defaultLayoutSizes.tracesListWidth,
+    inspectorHeight: typeof candidate.inspectorHeight === "number" ? candidate.inspectorHeight : defaultLayoutSizes.inspectorHeight,
+    tracesHeight: typeof candidate.tracesHeight === "number" ? candidate.tracesHeight : defaultLayoutSizes.tracesHeight,
+  };
 }
 
 function appendEvent(message: Extract<ChatMessage, { role: "assistant" }>, event: ChatEvent): Extract<ChatMessage, { role: "assistant" }> {
@@ -262,6 +309,8 @@ function TraceBlock({ messageId, trace }: { messageId: string; trace: TraceItem[
 
 export default function Home() {
   const [activeNav, setActiveNav] = useState<NavId>("chat");
+  const [activeRightPanel, setActiveRightPanel] = useState<RightPanelTab>("inspector");
+  const [layoutSizes, setLayoutSizes] = useState<LayoutSizes>(defaultLayoutSizes);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string>("");
   const [messages, setMessages] = useState<Record<string, ChatMessage[]>>({});
@@ -280,7 +329,26 @@ export default function Home() {
   const [isSaving, setIsSaving] = useState(false);
   const [inspectorError, setInspectorError] = useState<string | null>(null);
   const [modelSettings, setModelSettings] = useState<ModelSettings>(defaultModelSettings);
+  const [settingsSavedAt, setSettingsSavedAt] = useState<string | null>(null);
+  const [collapsedPanels, setCollapsedPanels] = useState<CollapsedPanels>({
+    inspector: false,
+    traces: false,
+    settings: false,
+  });
+  const [activeResizeKey, setActiveResizeKey] = useState<LayoutSizeKey | null>(null);
   const initialInspectorLoad = useRef(false);
+  const inspectorPanelRef = useRef<HTMLDivElement | null>(null);
+  const tracesPanelRef = useRef<HTMLDivElement | null>(null);
+  const settingsPanelRef = useRef<HTMLDivElement | null>(null);
+  const dragStateRef = useRef<{
+    key: LayoutSizeKey;
+    min: number;
+    max: number;
+    direction: 1 | -1;
+    axis: "x" | "y";
+    startPointer: number;
+    startSize: number;
+  } | null>(null);
 
   async function refreshTraces(preferredTraceId?: string) {
     try {
@@ -324,8 +392,70 @@ export default function Home() {
       return;
     }
 
+    const raw = window.localStorage.getItem(LAYOUT_SIZES_STORAGE_KEY);
+    if (!raw) {
+      return;
+    }
+
+    try {
+      setLayoutSizes(coerceLayoutSizes(JSON.parse(raw)));
+    } catch {
+      window.localStorage.removeItem(LAYOUT_SIZES_STORAGE_KEY);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
     window.localStorage.setItem(MODEL_SETTINGS_STORAGE_KEY, JSON.stringify(modelSettings));
+    setSettingsSavedAt(new Date().toLocaleTimeString());
   }, [modelSettings]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.localStorage.setItem(LAYOUT_SIZES_STORAGE_KEY, JSON.stringify(layoutSizes));
+  }, [layoutSizes]);
+
+  useEffect(() => {
+    function handlePointerMove(event: PointerEvent) {
+      const dragState = dragStateRef.current;
+      if (!dragState) {
+        return;
+      }
+
+      const delta = (dragState.axis === "x" ? event.clientX : event.clientY) - dragState.startPointer;
+      const nextSize = clamp(dragState.startSize + (delta * dragState.direction), dragState.min, dragState.max);
+      setLayoutSizes((current) => ({
+        ...current,
+        [dragState.key]: nextSize,
+      }));
+    }
+
+    function stopDragging() {
+      if (!dragStateRef.current) {
+        return;
+      }
+      dragStateRef.current = null;
+      setActiveResizeKey(null);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    }
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", stopDragging);
+    window.addEventListener("pointercancel", stopDragging);
+
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", stopDragging);
+      window.removeEventListener("pointercancel", stopDragging);
+    };
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -395,11 +525,13 @@ export default function Home() {
   useEffect(() => {
     if (activeNav === "memory") {
       setSelectedInspectorPath("backend/memory/MEMORY.md");
+      setActiveRightPanel("inspector");
       return;
     }
 
     if (activeNav === "skills") {
       setSelectedInspectorPath("backend/skills/get_weather/SKILL.md");
+      setActiveRightPanel("inspector");
       return;
     }
 
@@ -532,6 +664,61 @@ export default function Home() {
     return sessionMatches.length > 0 ? sessionMatches : traceSummaries;
   }, [activeSessionId, traceSummaries]);
   const activeTrace = activeTraceId ? traceDetails[activeTraceId] ?? null : null;
+  const isRailCompact = layoutSizes.railWidth < 720;
+
+  function beginHorizontalResize(
+    key: LayoutSizeKey,
+    {
+      min,
+      oppositeMin,
+      direction,
+    }: {
+      min: number;
+      oppositeMin: number;
+      direction: 1 | -1;
+    },
+  ) {
+    return (event: React.PointerEvent<HTMLDivElement>) => {
+      const parentWidth = event.currentTarget.parentElement?.getBoundingClientRect().width ?? window.innerWidth;
+      const max = Math.max(min, parentWidth - oppositeMin - 24);
+      dragStateRef.current = {
+        key,
+        min,
+        max,
+        direction,
+        axis: "x",
+        startPointer: event.clientX,
+        startSize: layoutSizes[key],
+      };
+      setActiveResizeKey(key);
+      document.body.style.cursor = "col-resize";
+      document.body.style.userSelect = "none";
+      event.preventDefault();
+    };
+  }
+
+  function beginVerticalResize(
+    key: Extract<LayoutSizeKey, "inspectorHeight" | "tracesHeight">,
+    getMax: (parentHeight: number) => number,
+  ) {
+    return (event: React.PointerEvent<HTMLDivElement>) => {
+      const parentHeight = event.currentTarget.parentElement?.getBoundingClientRect().height ?? window.innerHeight;
+      const max = Math.max(railPanelMinHeight, getMax(parentHeight));
+      dragStateRef.current = {
+        key,
+        min: railPanelMinHeight,
+        max,
+        direction: 1,
+        axis: "y",
+        startPointer: event.clientY,
+        startSize: layoutSizes[key],
+      };
+      setActiveResizeKey(key);
+      document.body.style.cursor = "row-resize";
+      document.body.style.userSelect = "none";
+      event.preventDefault();
+    };
+  }
 
   useEffect(() => {
     if (visibleTraceSummaries.length === 0) {
@@ -552,6 +739,39 @@ export default function Home() {
     }, 200);
   }
 
+  function focusRightPanel(panel: RightPanelTab) {
+    setCollapsedPanels((current) => ({
+      ...current,
+      [panel]: false,
+    }));
+    setActiveRightPanel(panel);
+    const target =
+      panel === "inspector" ? inspectorPanelRef.current : panel === "traces" ? tracesPanelRef.current : settingsPanelRef.current;
+    window.setTimeout(() => {
+      target?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }, 80);
+  }
+
+  function toggleRailPanel(panel: RailPanelId) {
+    setCollapsedPanels((current) => {
+      const nextCollapsed = !current[panel];
+      return {
+        ...current,
+        [panel]: nextCollapsed,
+      };
+    });
+    if (collapsedPanels[panel]) {
+      setActiveRightPanel(panel);
+    }
+  }
+
+  const inspectorPanelHeight = collapsedPanels.inspector ? collapsedPanelHeight : layoutSizes.inspectorHeight;
+  const tracesPanelHeight = collapsedPanels.traces ? collapsedPanelHeight : layoutSizes.tracesHeight;
+  const settingsPanelHeight = collapsedPanels.settings ? collapsedPanelHeight : settingsPanelDefaultHeight;
+  const showInspectorContent = !collapsedPanels.inspector;
+  const showTracesContent = !collapsedPanels.traces;
+  const showSettingsContent = !collapsedPanels.settings;
+
   function handleSessionSelect(sessionId: string) {
     setActiveSessionId(sessionId);
     setActiveNav("chat");
@@ -561,12 +781,13 @@ export default function Home() {
   function handleTraceSelect(traceId: string) {
     setActiveTraceId(traceId);
     setActiveNav("chat");
+    focusRightPanel("traces");
   }
 
   function handleDemoPromptSelect(prompt: string) {
     setDraft(prompt);
     setActiveNav("chat");
-    focusChatWorkspace();
+    composerRef.current?.focus();
   }
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
@@ -687,13 +908,39 @@ export default function Home() {
     toast.success("Restored default model settings");
   }
 
+  function handleUseBackendDefaultKey() {
+    setModelSettings((current) => ({
+      ...current,
+      apiKey: "",
+    }));
+    toast.success("Cleared local API key", {
+      description: "The next request will use the backend default key.",
+    });
+  }
+
+  function handleSaveModelSettings() {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.localStorage.setItem(MODEL_SETTINGS_STORAGE_KEY, JSON.stringify(modelSettings));
+    const timestamp = new Date().toLocaleTimeString();
+    setSettingsSavedAt(timestamp);
+    toast.success("Saved model settings", {
+      description: "Stored locally in this browser.",
+    });
+  }
+
   return (
     <>
       <Toaster position="top-right" richColors />
       <main className="min-h-screen bg-[linear-gradient(180deg,#f8fafc_0%,#eef2ff_100%)] px-4 py-4 text-foreground sm:px-5 sm:py-5">
         <div className="mx-auto w-full max-w-[1800px]">
-          <section className="flex flex-col gap-4 md:grid md:min-h-[calc(100vh-2.5rem)] md:grid-cols-[260px_minmax(0,1fr)] lg:grid-cols-[280px_minmax(0,1fr)] xl:grid-cols-[300px_minmax(0,1fr)]">
-            <aside className="flex min-h-0 flex-col rounded-[20px] border border-slate-800/80 bg-[linear-gradient(180deg,rgba(15,23,42,0.98),rgba(15,23,42,0.92))] p-4 shadow-[0_18px_50px_rgba(15,23,42,0.22)] sm:p-5 md:sticky md:top-4 md:h-[calc(100vh-2.5rem)] md:overflow-hidden lg:rounded-[22px]">
+          <section className="flex min-h-[calc(100vh-2rem)] flex-col gap-4 md:flex-row md:items-start">
+            <aside
+              className="flex min-h-0 shrink-0 flex-col rounded-[20px] border border-slate-800/80 bg-[linear-gradient(180deg,rgba(15,23,42,0.98),rgba(15,23,42,0.92))] p-4 shadow-[0_18px_50px_rgba(15,23,42,0.22)] sm:p-5 md:sticky md:top-4 md:max-h-[calc(100vh-2.5rem)] lg:rounded-[22px]"
+              style={{ width: `min(100%, ${layoutSizes.sidebarWidth}px)` }}
+            >
               <div className="flex min-h-0 flex-1 flex-col gap-4 lg:gap-5">
                 <div className="border-b border-white/10 pb-4 lg:pb-5">
                   <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-sky-300/70">Workspace</p>
@@ -769,379 +1016,615 @@ export default function Home() {
               </div>
             </aside>
 
-            <div className="flex min-h-0 flex-col gap-4">
-              <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(420px,36vw)] xl:grid-cols-[minmax(0,1fr)_minmax(460px,38vw)] 2xl:grid-cols-[minmax(0,1fr)_minmax(560px,42vw)]">
-                <section className="flex min-h-[60vh] min-w-0 flex-col rounded-[20px] border border-slate-200/80 bg-white p-5 shadow-[0_12px_34px_rgba(15,23,42,0.06)] sm:p-6 lg:h-[calc(100vh-2.5rem)] lg:overflow-hidden lg:rounded-[22px]">
-                <div className="flex flex-col gap-3 border-b border-slate-200/80 pb-4 sm:flex-row sm:items-center sm:justify-between">
-                  <div className="space-y-2">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-400">Chat</p>
-                      <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                        mini OpenClaw
-                      </span>
-                    </div>
-                    <h2 className="text-[1.35rem] font-semibold tracking-tight text-slate-950 sm:text-[1.5rem]" ref={stageHeadingRef}>
-                      Chat workspace
-                    </h2>
-                  </div>
-                  <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 sm:self-start">
-                    {isStreaming ? <Loader2 className="h-4 w-4 animate-spin text-primary" /> : <WandSparkles className="h-4 w-4 text-slate-400" />}
-                    <span className="truncate text-sm font-medium text-slate-700">Session {activeSession?.name ?? activeSessionId ?? "draft"}</span>
-                  </div>
-                </div>
+            <div
+              aria-hidden="true"
+              className="relative hidden w-4 shrink-0 cursor-col-resize touch-none items-center justify-center md:flex"
+              onPointerDown={beginHorizontalResize("sidebarWidth", { min: 240, oppositeMin: 720, direction: 1 })}
+            >
+              <span className="h-24 w-px rounded-full bg-slate-300 transition group-hover:bg-slate-400" />
+              <span className="absolute inset-y-6 left-1/2 w-[3px] -translate-x-1/2 rounded-full bg-slate-200/90" />
+            </div>
 
-                <div className="flex min-h-0 flex-1 flex-col justify-between gap-6 pt-6">
-                  <div className="min-h-0 flex-1 overflow-y-auto pr-1">
-                    <div className="space-y-4">
-                      <div className="rounded-[16px] border border-slate-200 bg-slate-50/80 px-4 py-3">
-                        <p className="text-sm text-slate-600">
-                          Current session: <span className="font-semibold text-slate-950">{activeSession?.name ?? activeSessionId ?? "draft session"}</span>
-                        </p>
-                        {activeNav !== "chat" ? (
-                          <p className="mt-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-500">
-                            Inspector focus is on <span className="font-semibold text-slate-700">{activeNavLabel}</span>. The conversation stays live here.
-                          </p>
-                        ) : null}
-                      </div>
-                      {currentSessionStatus === "loading" ? (
-                        <div className="rounded-[24px] border border-dashed border-slate-200 bg-white/80 p-6 text-sm text-slate-500">
-                          Loading session history...
-                        </div>
-                      ) : null}
-                      {currentSessionStatus !== "loading" && sessionMessages.length === 0 ? (
-                        <div className="rounded-[24px] border border-dashed border-slate-200 bg-white/80 p-6 text-sm text-slate-500">
-                          No messages in this session yet. Send the first prompt to get started.
-                        </div>
-                      ) : null}
-                      {sessionMessages.map((message) => {
-                        if (message.role === "user") {
-                          return (
-                            <article key={message.id} className="max-w-[90%] rounded-[18px] border border-slate-200 bg-slate-50/80 p-5 xl:max-w-[82%]">
-                              <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">User</p>
-                              <p className="mt-3 whitespace-pre-wrap text-[15px] leading-7 text-slate-700">{message.content}</p>
-                            </article>
-                          );
-                        }
-
-                        return (
-                          <article key={message.id} className="ml-auto max-w-[94%] rounded-[18px] border border-sky-200 bg-[linear-gradient(135deg,#eff6ff,#ffffff)] p-5 xl:max-w-[88%]">
-                            <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.2em] text-sky-700">
-                              <Bot className="h-4 w-4" />
-                              Assistant
-                            </div>
-                            <p className="mt-3 whitespace-pre-wrap text-[15px] leading-7 text-slate-700">
-                              {message.content || (isStreaming ? "Streaming response..." : "Waiting for assistant output.")}
-                            </p>
-                            <TraceBlock messageId={message.id} trace={message.trace} />
-                          </article>
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                  <div className="rounded-[18px] border border-slate-200 bg-slate-50/90 p-4 lg:rounded-[20px]">
-                    <form className="flex flex-col gap-3 2xl:flex-row" onSubmit={handleSubmit}>
-                      <Input
-                        aria-label="Chat composer"
-                        className="h-14 min-w-0 rounded-xl border-slate-200 bg-white px-4 text-base shadow-sm"
-                        ref={composerRef}
-                        onChange={(event) => setDraft(event.target.value)}
-                        placeholder="Ask the agent to inspect a skill, fetch a file, or explain the current session."
-                        value={draft}
-                      />
-                      <Button className="h-14 rounded-xl px-6 text-base xl:min-w-36" disabled={isStreaming || !draft.trim()} type="submit">
-                        {isStreaming ? "Streaming..." : "Send"}
-                      </Button>
-                    </form>
-                    <p className="mt-2 text-sm text-slate-500">Continue this session here.</p>
-                    {streamError ? <p className="mt-3 text-sm text-rose-600">{streamError}</p> : null}
-                  </div>
-
-                  <div className="rounded-[18px] border border-slate-200 bg-white p-4 lg:rounded-[20px]">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-400">Interview Demo</p>
-                        <h3 className="mt-2 text-base font-semibold text-slate-950">Seeded prompts</h3>
-                        <p className="mt-1 text-sm leading-6 text-slate-500">Use these to demo Mini-OpenClaw as an interview assistant, resume coach, and project storyteller.</p>
-                      </div>
-                      <Button
-                        className="h-9 rounded-xl px-3"
-                        onClick={() => setSelectedInspectorPath("backend/workspace/INTERVIEW_DEMO.md")}
-                        type="button"
-                        variant="outline"
-                      >
-                        <FileText className="mr-2 h-4 w-4" />
-                        Open sheet
-                      </Button>
-                    </div>
-                    <div className="mt-4 grid gap-2">
-                      {interviewDemoPrompts.map((prompt) => (
-                        <button
-                          key={prompt}
-                          className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-left text-sm leading-6 text-slate-700 transition hover:border-slate-300 hover:bg-slate-100"
-                          onClick={() => handleDemoPromptSelect(prompt)}
-                          type="button"
-                        >
-                          {prompt}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              </section>
-
-              <section className="flex min-h-[60vh] min-w-0 flex-col rounded-[20px] border border-slate-200/80 bg-[#f6f8fc] p-4 shadow-[0_12px_34px_rgba(15,23,42,0.05)] sm:p-5 lg:h-[calc(100vh-2.5rem)] lg:overflow-hidden lg:rounded-[22px]">
-                <div className="flex items-start justify-between gap-4 border-b border-slate-200/80 pb-5">
-                  <div>
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-400">Traces</p>
-                    <h2 className="mt-3 text-2xl font-semibold tracking-tight text-slate-950">Runtime diagnostics</h2>
-                    <p className="mt-2 text-sm leading-6 text-slate-500">Inspect chat runs, tool calls, failures, and latency without leaving the workspace.</p>
-                  </div>
-                  <div className="flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-500">
-                    <span className={['h-2 w-2 rounded-full', traceStatus === 'error' ? 'bg-rose-500' : traceStatus === 'loading' ? 'bg-amber-500' : 'bg-emerald-500'].join(' ')} />
-                    {visibleTraceSummaries.length} traces
-                  </div>
-                </div>
-
-                <div className="mt-5 grid min-h-0 flex-1 gap-4 2xl:grid-cols-[240px_minmax(0,1fr)]">
-                  <div className="flex min-h-[220px] max-h-[320px] flex-col rounded-[18px] border border-slate-200 bg-white p-3 shadow-sm 2xl:max-h-none">
-                    <div className="flex items-center justify-between gap-2 px-2 pb-3">
-                      <div className="flex items-center gap-2">
-                        <History className="h-4 w-4 text-slate-400" />
-                        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Runs</p>
-                      </div>
-                      <PanelRightOpen className="h-4 w-4 text-slate-300" />
-                    </div>
-                    <div className="min-h-0 flex-1 space-y-1 overflow-y-auto pr-1">
-                      {visibleTraceSummaries.length === 0 ? (
-                        <div className="rounded-xl border border-dashed border-slate-200 px-3 py-4 text-sm text-slate-500">No traces yet.</div>
-                      ) : (
-                        visibleTraceSummaries.map((trace) => {
-                          const active = trace.trace_id === activeTraceId;
-                          return (
-                            <button
-                              key={trace.trace_id}
-                              className={[
-                                'w-full rounded-xl border px-3 py-2.5 text-left transition',
-                                active ? 'border-slate-900 bg-slate-950 text-white' : 'border-transparent bg-slate-50 text-slate-700 hover:border-slate-200 hover:bg-slate-100',
-                              ].join(' ')}
-                              onClick={() => handleTraceSelect(trace.trace_id)}
-                              type="button"
-                            >
-                              <div className="flex items-center justify-between gap-3">
-                                <span className="truncate text-sm font-medium">{trace.trace_id}</span>
-                                <span className="text-[11px] uppercase tracking-[0.18em] text-slate-400">{trace.final_status}</span>
-                              </div>
-                              <p className={['mt-1 text-xs', active ? 'text-white/65' : 'text-slate-500'].join(' ')}>{trace.session_id}</p>
-                              <p className={['mt-1 text-xs', active ? 'text-white/50' : 'text-slate-400'].join(' ')}>{trace.latency_ms ?? 0} ms</p>
-                            </button>
-                          );
-                        })
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="flex min-h-[440px] min-w-0 flex-col rounded-[18px] border border-slate-200 bg-white shadow-sm 2xl:min-h-[520px]">
-                    <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2">
-                          <FileCode2 className="h-4 w-4 text-primary" />
-                          <p className="truncate text-sm font-semibold text-slate-900">{activeTrace?.trace_id ?? activeTraceId ?? 'Select a trace'}</p>
-                          <span className={["rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em]", activeTrace?.final_status === "error" ? "border-rose-200 bg-rose-50 text-rose-700" : activeTrace?.final_status === "success" ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-slate-200 bg-slate-50 text-slate-500"].join(" ")}>
-                            {activeTrace?.final_status ?? traceStatus}
+            <div className="flex min-h-0 flex-1 flex-col gap-4">
+              <div className="flex min-h-0 flex-col gap-4 lg:flex-row">
+                <section className="flex min-h-[70vh] min-w-0 flex-1 flex-col overflow-hidden rounded-[20px] border border-slate-200/80 bg-white p-5 shadow-[0_12px_34px_rgba(15,23,42,0.06)] sm:p-6 xl:rounded-[22px]">
+                  <div className="shrink-0 border-b border-slate-200/80 pb-4">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="space-y-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-400">Chat</p>
+                          <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                            mini OpenClaw
                           </span>
                         </div>
-                        <p className="mt-1 truncate text-xs text-slate-500">{activeTrace?.session_id ?? 'No trace selected'}</p>
+                        <h2 className="text-[1.35rem] font-semibold tracking-tight text-slate-950 sm:text-[1.5rem]" ref={stageHeadingRef}>
+                          Chat workspace
+                        </h2>
+                        <p className="text-sm leading-6 text-slate-500">{activeViewDescription}</p>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-3 sm:justify-end">
+                        <Button className="h-10 rounded-xl px-4" onClick={() => focusRightPanel("settings")} type="button" variant="outline">
+                          <Settings2 className="mr-2 h-4 w-4" />
+                          Model settings
+                        </Button>
+                        <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 sm:self-start">
+                          {isStreaming ? <Loader2 className="h-4 w-4 animate-spin text-primary" /> : <WandSparkles className="h-4 w-4 text-slate-400" />}
+                          <span className="truncate text-sm font-medium text-slate-700">Session {activeSession?.name ?? activeSessionId ?? "draft"}</span>
+                        </div>
                       </div>
                     </div>
-                    <div className="min-h-0 flex-1 overflow-y-auto p-4">
-                      {activeTrace ? (
-                        <div className="space-y-3">
-                        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
-                            <p>Model: {activeTrace.model_name}</p>
-                            <p className="mt-1">Latency: {activeTrace.latency_ms ?? 0} ms</p>
-                            <p className="mt-1">Started: {formatTimestamp(activeTrace.start_time)}</p>
-                            {activeTrace.error_category ? <p className="mt-1">Error category: {activeTrace.error_category}</p> : null}
-                            {activeTrace.retry_count > 0 ? <p className="mt-1">Retries: {activeTrace.retry_count}</p> : null}
-                            {activeTrace.friendly_message ? <p className="mt-2 text-rose-700">{activeTrace.friendly_message}</p> : null}
+                  </div>
+
+                  <div className="flex min-h-0 flex-1 flex-col justify-between gap-6 pt-6">
+                    <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+                      <div className="space-y-4">
+                        <div className="rounded-[16px] border border-slate-200 bg-slate-50/80 px-4 py-3">
+                          <p className="text-sm text-slate-600">
+                            Current session: <span className="font-semibold text-slate-950">{activeSession?.name ?? activeSessionId ?? "draft session"}</span>
+                          </p>
+                          {activeNav !== "chat" ? (
+                            <p className="mt-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-500">
+                              Inspector focus is on <span className="font-semibold text-slate-700">{activeNavLabel}</span>. The conversation stays live here.
+                            </p>
+                          ) : null}
+                        </div>
+                        {currentSessionStatus === "loading" ? (
+                          <div className="rounded-[24px] border border-dashed border-slate-200 bg-white/80 p-6 text-sm text-slate-500">
+                            Loading session history...
                           </div>
-                          {activeTrace.events.map((event, index) => (
-                            <div key={`${activeTrace.trace_id}-${index}`} className="rounded-2xl border border-slate-200 bg-white p-4">
-                              <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-400">{event.kind}</p>
-                              <pre className="mt-2 overflow-x-auto whitespace-pre-wrap break-words text-xs leading-6 text-slate-600">{JSON.stringify(event.payload, null, 2)}</pre>
+                        ) : null}
+                        {currentSessionStatus !== "loading" && sessionMessages.length === 0 ? (
+                          <div className="rounded-[24px] border border-dashed border-slate-200 bg-white/80 p-6 text-sm text-slate-500">
+                            No messages in this session yet. Send the first prompt to get started.
+                          </div>
+                        ) : null}
+                        {sessionMessages.map((message) => {
+                          if (message.role === "user") {
+                            return (
+                              <article key={message.id} className="max-w-[90%] rounded-[18px] border border-slate-200 bg-slate-50/80 p-5 xl:max-w-[82%]">
+                                <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">User</p>
+                                <p className="mt-3 whitespace-pre-wrap text-[15px] leading-7 text-slate-700">{message.content}</p>
+                              </article>
+                            );
+                          }
+
+                          return (
+                            <article key={message.id} className="ml-auto max-w-[94%] rounded-[18px] border border-sky-200 bg-[linear-gradient(135deg,#eff6ff,#ffffff)] p-5 xl:max-w-[88%]">
+                              <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.2em] text-sky-700">
+                                <Bot className="h-4 w-4" />
+                                Assistant
+                              </div>
+                              <p className="mt-3 whitespace-pre-wrap text-[15px] leading-7 text-slate-700">
+                                {message.content || (isStreaming ? "Streaming response..." : "Waiting for assistant output.")}
+                              </p>
+                              <TraceBlock messageId={message.id} trace={message.trace} />
+                            </article>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    <div className="rounded-[18px] border border-slate-200 bg-slate-50/90 p-4 lg:rounded-[20px]">
+                      <div className="mb-3 flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-semibold text-slate-900">Continue chat</p>
+                          <p className="text-xs text-slate-500">Type a message here to keep talking in the selected session.</p>
+                        </div>
+                        <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                          Composer
+                        </span>
+                      </div>
+                      <form className="flex flex-col gap-3 2xl:flex-row" onSubmit={handleSubmit}>
+                        <Input
+                          aria-label="Chat composer"
+                          className="h-14 min-w-0 rounded-xl border-slate-200 bg-white px-4 text-base shadow-sm"
+                          ref={composerRef}
+                          onChange={(event) => setDraft(event.target.value)}
+                          placeholder="Type a message to continue this chat session..."
+                          value={draft}
+                        />
+                        <Button className="h-14 rounded-xl px-6 text-base xl:min-w-36" disabled={isStreaming || !draft.trim()} type="submit">
+                          {isStreaming ? "Streaming..." : "Send message"}
+                        </Button>
+                      </form>
+                      <p className="mt-2 text-sm text-slate-500">Press Enter or click <span className="font-medium text-slate-700">Send message</span> to continue the active session.</p>
+                      {streamError ? <p className="mt-3 text-sm text-rose-600">{streamError}</p> : null}
+                    </div>
+
+                    <div className="rounded-[18px] border border-slate-200 bg-white p-4 lg:rounded-[20px]">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-400">Interview Demo</p>
+                          <h3 className="mt-2 text-base font-semibold text-slate-950">Seeded prompts</h3>
+                          <p className="mt-1 text-sm leading-6 text-slate-500">Use these to demo Mini-OpenClaw as an interview assistant, resume coach, and project storyteller.</p>
+                        </div>
+                        <Button
+                          className="h-9 rounded-xl px-3"
+                          onClick={() => setSelectedInspectorPath("backend/workspace/INTERVIEW_DEMO.md")}
+                          type="button"
+                          variant="outline"
+                        >
+                          <FileText className="mr-2 h-4 w-4" />
+                          Open sheet
+                        </Button>
+                      </div>
+                      <div className="mt-4 grid gap-2">
+                        {interviewDemoPrompts.map((prompt) => (
+                          <button
+                            key={prompt}
+                            className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-left text-sm leading-6 text-slate-700 transition hover:border-slate-300 hover:bg-slate-100"
+                            onClick={() => handleDemoPromptSelect(prompt)}
+                            type="button"
+                          >
+                            {prompt}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </section>
+
+                <div
+                  aria-hidden="true"
+                  className="relative hidden w-4 shrink-0 cursor-col-resize touch-none items-center justify-center lg:flex"
+                  onPointerDown={beginHorizontalResize("railWidth", { min: 340, oppositeMin: 520, direction: -1 })}
+                >
+                  <span className="h-24 w-px rounded-full bg-slate-300" />
+                  <span className="absolute inset-y-6 left-1/2 w-[3px] -translate-x-1/2 rounded-full bg-slate-200/90" />
+                </div>
+
+              <section
+                className="flex min-h-[72vh] min-w-0 shrink-0 flex-col rounded-[20px] border border-slate-200/80 bg-[#f6f8fc] p-4 shadow-[0_12px_34px_rgba(15,23,42,0.05)] sm:p-5 xl:sticky xl:top-4 xl:max-h-[calc(100vh-2.5rem)] xl:overflow-y-auto xl:overscroll-contain xl:rounded-[22px]"
+                style={{ width: `min(100%, ${layoutSizes.railWidth}px)` }}
+              >
+                <div className="flex items-start justify-between gap-4 border-b border-slate-200/80 pb-5">
+                  <div>
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-400">Workspace Rail</p>
+                    <h2 className="mt-3 text-2xl font-semibold tracking-tight text-slate-950">Workspace surfaces</h2>
+                    <p className="mt-2 text-sm leading-6 text-slate-500">
+                      Keep inspector, traces, and request settings open together. Drag the separators to rebalance the stack.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-500">
+                    <span
+                      className={[
+                        "h-2 w-2 rounded-full",
+                        traceStatus === "error" ? "bg-rose-500" : traceStatus === "loading" ? "bg-amber-500" : "bg-emerald-500",
+                      ].join(" ")}
+                    />
+                    {visibleTraceSummaries.length} traces · {inspectorFiles.length} files
+                  </div>
+                </div>
+
+                <div className="mt-4 grid grid-cols-3 gap-2">
+                  <button
+                    className={[
+                      "rounded-xl border px-3 py-2.5 text-sm font-medium transition",
+                      activeRightPanel === "inspector" ? "border-slate-900 bg-slate-950 text-white" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50",
+                    ].join(" ")}
+                    onClick={() => focusRightPanel("inspector")}
+                    type="button"
+                  >
+                    <span className="inline-flex items-center gap-2">
+                      <FolderTree className="h-4 w-4" />
+                      Inspector
+                    </span>
+                  </button>
+                  <button
+                    className={[
+                      "rounded-xl border px-3 py-2.5 text-sm font-medium transition",
+                      activeRightPanel === "traces" ? "border-slate-900 bg-slate-950 text-white" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50",
+                    ].join(" ")}
+                    onClick={() => focusRightPanel("traces")}
+                    type="button"
+                  >
+                    <span className="inline-flex items-center gap-2">
+                      <History className="h-4 w-4" />
+                      Traces
+                    </span>
+                  </button>
+                  <button
+                    className={[
+                      "rounded-xl border px-3 py-2.5 text-sm font-medium transition",
+                      activeRightPanel === "settings" ? "border-slate-900 bg-slate-950 text-white" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50",
+                    ].join(" ")}
+                    onClick={() => focusRightPanel("settings")}
+                    type="button"
+                  >
+                    <span className="inline-flex items-center gap-2">
+                      <Settings2 className="h-4 w-4" />
+                      Settings
+                    </span>
+                  </button>
+                </div>
+
+                <div className="mt-5 flex min-h-0 flex-1 flex-col pb-1">
+                  <section
+                    className={[
+                      "flex min-h-0 shrink-0 flex-col overflow-hidden rounded-[18px] border border-slate-200 bg-white shadow-sm transition-shadow",
+                      activeRightPanel === "inspector" ? "ring-2 ring-slate-900/8 shadow-[0_18px_36px_rgba(15,23,42,0.08)]" : "",
+                    ].join(" ")}
+                    ref={inspectorPanelRef}
+                    style={{ height: `${inspectorPanelHeight}px` }}
+                  >
+                    <div className="border-b border-slate-200 px-4 py-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-400">Inspector</p>
+                          {showInspectorContent ? <p className="mt-1 text-sm text-slate-500">{inspectorDescription}</p> : null}
+                        </div>
+                        <div className="flex flex-wrap items-center justify-end gap-2">
+                          {showInspectorContent
+                            ? visibleInspectorGroups.map((group) => (
+                                <span
+                                  key={group}
+                                  className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-500"
+                                >
+                                  {getInspectorGroupLabel(group)}
+                                </span>
+                              ))
+                            : null}
+                          <Button className="h-9 shrink-0 rounded-xl px-3" onClick={() => toggleRailPanel("inspector")} type="button" variant="outline">
+                            {collapsedPanels.inspector ? <ChevronDown className="mr-2 h-4 w-4" /> : <ChevronUp className="mr-2 h-4 w-4" />}
+                            {collapsedPanels.inspector ? "Expand" : "Collapse"}
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+
+                    {showInspectorContent ? (
+                      <div className={["flex min-h-0 flex-1 gap-4 overflow-hidden p-4", isRailCompact ? "flex-col" : "flex-row"].join(" ")}>
+                      <div
+                        className={[
+                          "flex shrink-0 flex-col rounded-[18px] border border-slate-200 bg-white p-3 shadow-sm",
+                          isRailCompact ? "min-h-[220px] max-h-[240px] w-full" : "min-h-[220px] max-h-[260px]",
+                        ].join(" ")}
+                        style={{ width: isRailCompact ? "100%" : `${layoutSizes.inspectorListWidth}px` }}
+                      >
+                        <div className="flex items-center justify-between gap-2 px-2 pb-3">
+                          <div className="flex items-center gap-2">
+                            <FolderTree className="h-4 w-4 text-slate-400" />
+                            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Files</p>
+                          </div>
+                          <PanelRightOpen className="h-4 w-4 text-slate-300" />
+                        </div>
+                        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
+                          {groupedInspectorFiles.map(({ group, files }) => (
+                            <div key={group} className="space-y-1.5">
+                              <p className="px-2 text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-400">{getInspectorGroupLabel(group)}</p>
+                              <div className="space-y-1">
+                                {files.map((file) => {
+                                  const active = file.path === selectedInspectorPath;
+
+                                  return (
+                                    <button
+                                      key={file.path}
+                                      className={[
+                                        "flex w-full items-start gap-3 rounded-xl border px-3 py-2.5 text-left transition",
+                                        active
+                                          ? "border-slate-900 bg-slate-950 text-white shadow-[0_10px_25px_rgba(15,23,42,0.18)]"
+                                          : "border-transparent bg-slate-50/80 text-slate-700 hover:border-slate-200 hover:bg-slate-100",
+                                      ].join(" ")}
+                                      onClick={() => setSelectedInspectorPath(file.path)}
+                                      type="button"
+                                    >
+                                      <FileText className={["mt-0.5 h-4 w-4 shrink-0", active ? "text-white/80" : "text-slate-400"].join(" ")} />
+                                      <div className="min-w-0 flex-1">
+                                        <p className="truncate text-sm font-medium">{file.label}</p>
+                                        <p className={["mt-1 truncate text-[11px]", active ? "text-white/60" : "text-slate-400"].join(" ")}>
+                                          {file.path}
+                                        </p>
+                                      </div>
+                                    </button>
+                                  );
+                                })}
+                              </div>
                             </div>
                           ))}
                         </div>
-                      ) : (
-                        <div className="rounded-2xl border border-dashed border-slate-200 p-6 text-sm text-slate-500">Pick a trace to inspect its events.</div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </section>
-
-              <section className="flex min-h-[60vh] min-w-0 flex-col rounded-[20px] border border-slate-200/80 bg-[#f6f8fc] p-4 shadow-[0_12px_34px_rgba(15,23,42,0.05)] sm:p-5 lg:h-[calc(100vh-2.5rem)] lg:overflow-hidden lg:rounded-[22px]">
-                <div className="flex items-start justify-between gap-4 border-b border-slate-200/80 pb-5">
-                  <div>
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-400">Inspector</p>
-                    <h2 className="mt-3 text-2xl font-semibold tracking-tight text-slate-950">{inspectorTitle}</h2>
-                    <p className="mt-2 text-sm leading-6 text-slate-500">{inspectorDescription}</p>
-                  </div>
-                  <div className="flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-500">
-                    <span className="h-2 w-2 rounded-full bg-emerald-500" />
-                    Local agent workspace
-                  </div>
-                </div>
-
-                <div className="mt-5 flex flex-wrap items-center gap-2">
-                  {visibleInspectorGroups.map((group) => (
-                    <span
-                      key={group}
-                      className="rounded-full border border-slate-200 bg-white px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500"
-                    >
-                      {getInspectorGroupLabel(group)}
-                    </span>
-                  ))}
-                  <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500">
-                    {inspectorFiles.length} files
-                  </span>
-                </div>
-
-                <div className="mt-4 grid min-h-0 flex-1 gap-4 2xl:grid-cols-[240px_minmax(0,1fr)]">
-                  <div className="flex min-h-[220px] max-h-[320px] flex-col rounded-[18px] border border-slate-200 bg-white p-3 shadow-sm 2xl:max-h-none">
-                    <div className="flex items-center justify-between gap-2 px-2 pb-3">
-                      <div className="flex items-center gap-2">
-                      <FolderTree className="h-4 w-4 text-slate-400" />
-                      <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Files</p>
                       </div>
-                      <PanelRightOpen className="h-4 w-4 text-slate-300" />
-                    </div>
-                    <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
-                      {groupedInspectorFiles.map(({ group, files }) => (
-                        <div key={group} className="space-y-1.5">
-                          <p className="px-2 text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-400">{getInspectorGroupLabel(group)}</p>
-                          <div className="space-y-1">
-                            {files.map((file) => {
-                              const active = file.path === selectedInspectorPath;
 
-                              return (
-                                <button
-                                  key={file.path}
-                                  className={[
-                                    "flex w-full items-start gap-3 rounded-xl border px-3 py-2.5 text-left transition",
-                                    active
-                                      ? "border-slate-900 bg-slate-950 text-white shadow-[0_10px_25px_rgba(15,23,42,0.18)]"
-                                      : "border-transparent bg-slate-50/80 text-slate-700 hover:border-slate-200 hover:bg-slate-100",
-                                  ].join(" ")}
-                                  onClick={() => setSelectedInspectorPath(file.path)}
-                                  type="button"
-                                >
-                                  <FileText className={["mt-0.5 h-4 w-4 shrink-0", active ? "text-white/80" : "text-slate-400"].join(" ")} />
-                                  <div className="min-w-0 flex-1">
-                                    <p className="truncate text-sm font-medium">{file.label}</p>
-                                    <p className={["mt-1 truncate text-[11px]", active ? "text-white/60" : "text-slate-400"].join(" ")}>
-                                      {file.path}
-                                    </p>
-                                  </div>
-                                </button>
-                              );
-                            })}
-                          </div>
+                      {!isRailCompact ? (
+                        <div
+                          aria-hidden="true"
+                          className="relative hidden w-4 shrink-0 cursor-col-resize touch-none items-center justify-center lg:flex"
+                          onPointerDown={beginHorizontalResize("inspectorListWidth", { min: 180, oppositeMin: 220, direction: 1 })}
+                        >
+                          <span className="h-20 w-px rounded-full bg-slate-300" />
+                          <span className="absolute inset-y-6 left-1/2 w-[3px] -translate-x-1/2 rounded-full bg-slate-200/90" />
                         </div>
-                      ))}
-                    </div>
+                      ) : null}
+
+                      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-[18px] border border-slate-200 bg-white shadow-sm">
+                        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <FileCode2 className="h-4 w-4 text-primary" />
+                              <p className="truncate text-sm font-semibold text-slate-900">{selectedInspectorLabel}</p>
+                              <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                                {getInspectorGroupLabel(selectedInspectorGroup)}
+                              </span>
+                              {isDirty ? (
+                                <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-amber-700">
+                                  Unsaved
+                                </span>
+                              ) : null}
+                            </div>
+                            <p className="mt-1 truncate text-xs text-slate-500">{selectedInspectorPath}</p>
+                          </div>
+                          <Button className="h-10 rounded-xl px-4 sm:shrink-0" disabled={isInspectorLoading || isSaving} onClick={handleSaveInspector} type="button">
+                            {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+                            Save
+                          </Button>
+                        </div>
+
+                        <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
+                          {isInspectorLoading ? (
+                            <div className="flex h-full items-center justify-center gap-3 text-sm text-slate-500">
+                              <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                              Loading file...
+                            </div>
+                          ) : (
+                            <div className="h-full min-h-0 min-w-0 overflow-hidden">
+                              <MonacoEditor height="100%" onChange={setEditorValue} onSave={handleSaveInspector} value={editorValue} />
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="border-t border-slate-200 px-4 py-3">
+                          <p className="text-sm text-slate-600">
+                            {isSaving ? "Saving changes..." : inspectorError ? `Save error: ${inspectorError}` : "Cmd/Ctrl+S saves the current file."}
+                          </p>
+                        </div>
+                      </div>
+                      </div>
+                    ) : null}
+                  </section>
+
+                  <div
+                    aria-hidden="true"
+                    className={[
+                      "relative flex h-4 shrink-0 cursor-row-resize touch-none items-center justify-center transition-colors",
+                      activeResizeKey === "inspectorHeight" ? "bg-sky-100/80" : "hover:bg-slate-100",
+                    ].join(" ")}
+                    onPointerDown={beginVerticalResize(
+                      "inspectorHeight",
+                      (parentHeight) => parentHeight - tracesPanelHeight - settingsPanelHeight - (railHandleSize * 2),
+                    )}
+                  >
+                    <span className={["h-px w-24 rounded-full transition-colors", activeResizeKey === "inspectorHeight" ? "bg-sky-500" : "bg-slate-300"].join(" ")} />
+                    <span className={["absolute left-6 right-6 top-1/2 h-[3px] -translate-y-1/2 rounded-full transition-colors", activeResizeKey === "inspectorHeight" ? "bg-sky-200" : "bg-slate-200/90"].join(" ")} />
                   </div>
-                  <div className="flex min-h-[440px] min-w-0 flex-col rounded-[18px] border border-slate-200 bg-white shadow-sm 2xl:min-h-[520px]">
-                    <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2">
-                          <FileCode2 className="h-4 w-4 text-primary" />
-                          <p className="truncate text-sm font-semibold text-slate-900">{selectedInspectorLabel}</p>
-                          <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                            {getInspectorGroupLabel(selectedInspectorGroup)}
-                          </span>
-                          {isDirty ? (
-                            <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-amber-700">
-                              Unsaved
-                            </span>
+
+                  <section
+                    className={[
+                      "flex min-h-0 shrink-0 flex-col overflow-hidden rounded-[18px] border border-slate-200 bg-white shadow-sm transition-shadow",
+                      activeRightPanel === "traces" ? "ring-2 ring-slate-900/8 shadow-[0_18px_36px_rgba(15,23,42,0.08)]" : "",
+                    ].join(" ")}
+                    ref={tracesPanelRef}
+                    style={{ height: `${tracesPanelHeight}px` }}
+                  >
+                    <div className="border-b border-slate-200 px-4 py-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-400">Traces</p>
+                          {showTracesContent ? (
+                            <p className="mt-1 text-sm text-slate-500">Inspect chat runs, tool calls, failures, and latency without leaving the workspace.</p>
                           ) : null}
                         </div>
-                        <p className="mt-1 truncate text-xs text-slate-500">{selectedInspectorPath}</p>
-                      </div>
-                      <Button className="h-10 rounded-xl px-4 sm:shrink-0" disabled={isInspectorLoading || isSaving} onClick={handleSaveInspector} type="button">
-                        {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
-                        Save
-                      </Button>
-                    </div>
-
-                    <div className="min-h-[340px] flex-1 overflow-hidden 2xl:min-h-[420px]">
-                      {isInspectorLoading ? (
-                        <div className="flex h-full items-center justify-center gap-3 text-sm text-slate-500">
-                          <Loader2 className="h-4 w-4 animate-spin text-primary" />
-                          Loading file...
+                        <div className="flex items-center gap-2">
+                          {showTracesContent ? (
+                            <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-500">
+                              {visibleTraceSummaries.length} runs
+                            </span>
+                          ) : null}
+                          <Button className="h-9 shrink-0 rounded-xl px-3" onClick={() => toggleRailPanel("traces")} type="button" variant="outline">
+                            {collapsedPanels.traces ? <ChevronDown className="mr-2 h-4 w-4" /> : <ChevronUp className="mr-2 h-4 w-4" />}
+                            {collapsedPanels.traces ? "Expand" : "Collapse"}
+                          </Button>
                         </div>
-                      ) : (
-                        <MonacoEditor height="100%" onChange={setEditorValue} onSave={handleSaveInspector} value={editorValue} />
-                      )}
+                      </div>
                     </div>
 
-                    <div className="border-t border-slate-200 px-4 py-3">
-                      <p className="text-sm text-slate-600">
-                        {isSaving ? "Saving changes..." : inspectorError ? `Save error: ${inspectorError}` : "Cmd/Ctrl+S saves the current file."}
-                      </p>
+                    {showTracesContent ? (
+                      <div className={["flex min-h-0 flex-1 gap-4 overflow-hidden p-4", isRailCompact ? "flex-col" : "flex-row"].join(" ")}>
+                    <div
+                      className={[
+                        "flex shrink-0 flex-col rounded-[18px] border border-slate-200 bg-white p-3 shadow-sm",
+                        isRailCompact ? "min-h-[220px] max-h-[240px] w-full" : "min-h-[220px] max-h-[260px]",
+                      ].join(" ")}
+                      style={{ width: isRailCompact ? "100%" : `${layoutSizes.tracesListWidth}px` }}
+                    >
+                      <div className="flex items-center justify-between gap-2 px-2 pb-3">
+                        <div className="flex items-center gap-2">
+                          <History className="h-4 w-4 text-slate-400" />
+                          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Runs</p>
+                        </div>
+                        <PanelRightOpen className="h-4 w-4 text-slate-300" />
+                      </div>
+                      <div className="min-h-0 flex-1 space-y-1 overflow-y-auto pr-1">
+                        {visibleTraceSummaries.length === 0 ? (
+                          <div className="rounded-xl border border-dashed border-slate-200 px-3 py-4 text-sm text-slate-500">No traces yet.</div>
+                        ) : (
+                          visibleTraceSummaries.map((trace) => {
+                            const active = trace.trace_id === activeTraceId;
+                            return (
+                              <button
+                                key={trace.trace_id}
+                                className={[
+                                  "w-full rounded-xl border px-3 py-2.5 text-left transition",
+                                  active ? "border-slate-900 bg-slate-950 text-white" : "border-transparent bg-slate-50 text-slate-700 hover:border-slate-200 hover:bg-slate-100",
+                                ].join(" ")}
+                                onClick={() => handleTraceSelect(trace.trace_id)}
+                                type="button"
+                              >
+                                <div className="flex items-center justify-between gap-3">
+                                  <span className="truncate text-sm font-medium">{trace.trace_id}</span>
+                                  <span className="text-[11px] uppercase tracking-[0.18em] text-slate-400">{trace.final_status}</span>
+                                </div>
+                                <p className={["mt-1 text-xs", active ? "text-white/65" : "text-slate-500"].join(" ")}>{trace.session_id}</p>
+                                <p className={["mt-1 text-xs", active ? "text-white/50" : "text-slate-400"].join(" ")}>{trace.latency_ms ?? 0} ms</p>
+                              </button>
+                            );
+                          })
+                        )}
+                      </div>
                     </div>
+
+                    {!isRailCompact ? (
+                      <div
+                        aria-hidden="true"
+                        className="relative hidden w-4 shrink-0 cursor-col-resize touch-none items-center justify-center lg:flex"
+                        onPointerDown={beginHorizontalResize("tracesListWidth", { min: 180, oppositeMin: 240, direction: 1 })}
+                      >
+                        <span className="h-20 w-px rounded-full bg-slate-300" />
+                        <span className="absolute inset-y-6 left-1/2 w-[3px] -translate-x-1/2 rounded-full bg-slate-200/90" />
+                      </div>
+                    ) : null}
+
+                    <div className="flex min-h-0 min-w-0 flex-1 flex-col rounded-[18px] border border-slate-200 bg-white shadow-sm">
+                      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <FileCode2 className="h-4 w-4 text-primary" />
+                            <p className="truncate text-sm font-semibold text-slate-900">{activeTrace?.trace_id ?? activeTraceId ?? "Select a trace"}</p>
+                            <span className={["rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em]", activeTrace?.final_status === "error" ? "border-rose-200 bg-rose-50 text-rose-700" : activeTrace?.final_status === "success" ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-slate-200 bg-slate-50 text-slate-500"].join(" ")}>
+                              {activeTrace?.final_status ?? traceStatus}
+                            </span>
+                          </div>
+                          <p className="mt-1 truncate text-xs text-slate-500">{activeTrace?.session_id ?? "No trace selected"}</p>
+                        </div>
+                      </div>
+                      <div className="min-h-0 flex-1 overflow-y-auto p-4">
+                        {activeTrace ? (
+                          <div className="space-y-3">
+                            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
+                              <p>Model: {activeTrace.model_name}</p>
+                              <p className="mt-1">Latency: {activeTrace.latency_ms ?? 0} ms</p>
+                              <p className="mt-1">Started: {formatTimestamp(activeTrace.start_time)}</p>
+                              {activeTrace.error_category ? <p className="mt-1">Error category: {activeTrace.error_category}</p> : null}
+                              {activeTrace.retry_count > 0 ? <p className="mt-1">Retries: {activeTrace.retry_count}</p> : null}
+                              {activeTrace.friendly_message ? <p className="mt-2 text-rose-700">{activeTrace.friendly_message}</p> : null}
+                            </div>
+                            {activeTrace.events.map((event, index) => (
+                              <div key={`${activeTrace.trace_id}-${index}`} className="rounded-2xl border border-slate-200 bg-white p-4">
+                                <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-400">{event.kind}</p>
+                                <pre className="mt-2 overflow-x-auto whitespace-pre-wrap break-words text-xs leading-6 text-slate-600">{JSON.stringify(event.payload, null, 2)}</pre>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="rounded-2xl border border-dashed border-slate-200 p-6 text-sm text-slate-500">Pick a trace to inspect its events.</div>
+                        )}
+                      </div>
+                    </div>
+                      </div>
+                    ) : null}
+                  </section>
+
+                  <div
+                    aria-hidden="true"
+                    className={[
+                      "relative flex h-4 shrink-0 cursor-row-resize touch-none items-center justify-center transition-colors",
+                      activeResizeKey === "tracesHeight" ? "bg-sky-100/80" : "hover:bg-slate-100",
+                    ].join(" ")}
+                    onPointerDown={beginVerticalResize(
+                      "tracesHeight",
+                      (parentHeight) => parentHeight - inspectorPanelHeight - settingsPanelHeight - (railHandleSize * 2),
+                    )}
+                  >
+                    <span className={["h-px w-24 rounded-full transition-colors", activeResizeKey === "tracesHeight" ? "bg-sky-500" : "bg-slate-300"].join(" ")} />
+                    <span className={["absolute left-6 right-6 top-1/2 h-[3px] -translate-y-1/2 rounded-full transition-colors", activeResizeKey === "tracesHeight" ? "bg-sky-200" : "bg-slate-200/90"].join(" ")} />
                   </div>
+
+                  <section
+                    className={[
+                      "flex min-h-0 shrink-0 flex-col overflow-hidden rounded-[18px] border border-slate-200 bg-white shadow-sm transition-shadow",
+                      activeRightPanel === "settings" ? "ring-2 ring-slate-900/8 shadow-[0_18px_36px_rgba(15,23,42,0.08)]" : "",
+                    ].join(" ")}
+                    ref={settingsPanelRef}
+                    style={{ height: `${settingsPanelHeight}px` }}
+                  >
+                      <div className="shrink-0 border-b border-slate-200 px-4 py-4">
+                        <div
+                          className={[
+                            "flex gap-3",
+                            showSettingsContent ? "flex-col xl:flex-row xl:items-start xl:justify-between" : "items-center justify-between",
+                          ].join(" ")}
+                        >
+                          <div className="max-w-[28rem]">
+                            <p className="text-sm font-medium text-slate-900">Request settings</p>
+                            {showSettingsContent ? (
+                              <>
+                                <p className="mt-1 text-xs leading-5 text-slate-500">These fields are sent with each chat request. Leave API Key empty to use the backend default.</p>
+                                <p className="mt-2 text-xs text-slate-400">
+                                  {settingsSavedAt ? `Auto-saved locally at ${settingsSavedAt}.` : "Auto-saves locally in this browser."}
+                                </p>
+                              </>
+                            ) : null}
+                          </div>
+                          <div className="flex flex-wrap items-center gap-2 xl:justify-end">
+                            {showSettingsContent ? (
+                              <>
+                                <Button className="h-9 rounded-2xl px-3" onClick={handleSaveModelSettings} type="button">
+                                  <Save className="mr-2 h-4 w-4" />
+                                  Save settings
+                                </Button>
+                                <Button className="h-9 rounded-2xl px-3" onClick={handleUseBackendDefaultKey} type="button" variant="outline">
+                                  Use backend key
+                                </Button>
+                                <Button className="h-9 rounded-2xl px-3" onClick={handleResetModelSettings} type="button" variant="outline">
+                                  <RotateCcw className="mr-2 h-4 w-4" />
+                                  Reset
+                                </Button>
+                              </>
+                            ) : null}
+                            <Button className="h-9 shrink-0 rounded-xl px-3" onClick={() => toggleRailPanel("settings")} type="button" variant="outline">
+                              {collapsedPanels.settings ? <ChevronDown className="mr-2 h-4 w-4" /> : <ChevronUp className="mr-2 h-4 w-4" />}
+                              {collapsedPanels.settings ? "Expand" : "Collapse"}
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                      {showSettingsContent ? (
+                        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
+                        <div className="grid gap-4 pb-4 xl:grid-cols-2">
+                          <div className="space-y-2">
+                            <label className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">Base URL</label>
+                            <Input
+                              className="h-11 rounded-2xl border-slate-200 bg-slate-50/80"
+                              onChange={(event) => handleModelSettingChange("baseUrl", event.target.value)}
+                              placeholder="https://api.codexzh.com/v1"
+                              value={modelSettings.baseUrl}
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <label className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">Model</label>
+                            <Input
+                              className="h-11 rounded-2xl border-slate-200 bg-slate-50/80"
+                              onChange={(event) => handleModelSettingChange("model", event.target.value)}
+                              placeholder="gpt-5.4"
+                              value={modelSettings.model}
+                            />
+                          </div>
+                          <div className="space-y-2 xl:col-span-2">
+                            <label className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">API Key</label>
+                            <Input
+                              className="h-11 rounded-2xl border-slate-200 bg-slate-50/80"
+                              onChange={(event) => handleModelSettingChange("apiKey", event.target.value)}
+                              placeholder="Leave empty to use backend default"
+                              type="password"
+                              value={modelSettings.apiKey}
+                            />
+                            <p className="text-xs leading-5 text-slate-400">
+                              If this local key has expired, clear it and Mini-OpenClaw will fall back to the backend default key.
+                            </p>
+                          </div>
+                        </div>
+                        </div>
+                      ) : null}
+                  </section>
                 </div>
-
-                <details className="mt-4 rounded-[18px] border border-slate-200 bg-white">
-                  <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-medium text-slate-700 marker:content-none">
-                    <span className="flex items-center gap-2">
-                      <Settings2 className="h-4 w-4 text-slate-400" />
-                      Model Settings
-                    </span>
-                    <ChevronDown className="h-4 w-4 text-slate-400 transition-transform group-open:rotate-180" />
-                  </summary>
-                  <div className="border-t border-slate-200 px-4 py-4">
-                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                      <p className="text-xs leading-5 text-slate-500">Sent with each chat request. Leave `API Key` empty to use the backend default.</p>
-                      <Button className="h-9 rounded-2xl px-3" onClick={handleResetModelSettings} type="button" variant="outline">
-                        <RotateCcw className="mr-2 h-4 w-4" />
-                        Reset
-                      </Button>
-                    </div>
-
-                    <div className="mt-4 grid gap-3">
-                      <div className="space-y-2">
-                        <label className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">Base URL</label>
-                        <Input
-                          className="h-11 rounded-2xl border-slate-200 bg-slate-50/80"
-                          onChange={(event) => handleModelSettingChange("baseUrl", event.target.value)}
-                          placeholder="https://api.codexzh.com/v1"
-                          value={modelSettings.baseUrl}
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <label className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">Model</label>
-                        <Input
-                          className="h-11 rounded-2xl border-slate-200 bg-slate-50/80"
-                          onChange={(event) => handleModelSettingChange("model", event.target.value)}
-                          placeholder="gpt-5.4"
-                          value={modelSettings.model}
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <label className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">API Key</label>
-                        <Input
-                          className="h-11 rounded-2xl border-slate-200 bg-slate-50/80"
-                          onChange={(event) => handleModelSettingChange("apiKey", event.target.value)}
-                          placeholder="Leave empty to use backend default"
-                          type="password"
-                          value={modelSettings.apiKey}
-                        />
-                      </div>
-                    </div>
-                  </div>
-                </details>
               </section>
             </div>
             </div>
