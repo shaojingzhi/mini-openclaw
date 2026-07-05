@@ -28,6 +28,7 @@ references/
 # Frontend
 node_modules/
 .next/
+.next-build/
 out/
 *.tsbuildinfo
 
