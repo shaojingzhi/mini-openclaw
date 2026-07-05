@@ -26,6 +26,7 @@ from pathlib import Path
 from threading import Lock
 from typing import Any, Iterable
 
+from backend.graph.index import expand_graph_evidence
 from langchain_core.tools import tool
 
 PROJECT_ROOT: Path = Path(__file__).resolve().parents[2]
@@ -38,6 +39,10 @@ EMPTY_KB_MESSAGE: str = (
     "knowledge-base search."
 )
 NO_RESULTS_MESSAGE: str = "No matching passages found in the knowledge base."
+GRAPH_UNAVAILABLE_MESSAGE: str = (
+    "Graph evidence unavailable: rebuild the graph with "
+    "`python -m backend.graph.index` to enable graph-assisted retrieval."
+)
 
 _retriever_cache: dict[tuple[str, str], Any] = {}
 _cache_lock: Lock = Lock()
@@ -156,8 +161,27 @@ def _format_nodes(nodes: Iterable[Any]) -> str:
     return "\n\n".join(parts)
 
 
+def _format_graph_evidence(query: str) -> str:
+    graph_result = expand_graph_evidence(query)
+    if not graph_result["available"]:
+        return GRAPH_UNAVAILABLE_MESSAGE
+
+    evidence = graph_result["evidence"]
+    if not evidence:
+        return "Graph-expanded evidence: no related nodes found."
+
+    lines = ["Graph-expanded evidence:"]
+    for node in evidence:
+        path = node.get("path")
+        suffix = f" — {path}" if path else ""
+        lines.append(f"- [{node['type']}] {node['label']}{suffix}")
+    if graph_result["edge_types"]:
+        lines.append(f"Traversed edge types: {', '.join(graph_result['edge_types'])}")
+    return "\n".join(lines)
+
+
 @tool("search_knowledge_base")
-def search_knowledge_base(query: str) -> str:
+def search_knowledge_base(query: str, use_graph: bool = False) -> str:
     """Search the local knowledge base using hybrid BM25 + vector retrieval.
 
     Files under ``backend/knowledge/`` (markdown, text, PDF) are indexed
@@ -167,6 +191,8 @@ def search_knowledge_base(query: str) -> str:
 
     Args:
         query: A natural-language or keyword query.
+        use_graph: When true, append graph-expanded evidence from the
+            persisted local graph.
 
     Returns:
         Top-k formatted passages with source filenames, or a message
@@ -178,7 +204,10 @@ def search_knowledge_base(query: str) -> str:
     nodes = retriever.retrieve(query)
     if not nodes:
         return NO_RESULTS_MESSAGE
-    return _format_nodes(nodes)
+    direct = _format_nodes(nodes)
+    if not use_graph:
+        return direct
+    return f"Direct matches:\n{direct}\n\n{_format_graph_evidence(query)}"
 
 
 __all__ = [
@@ -188,5 +217,6 @@ __all__ = [
     "STORAGE_DIR",
     "EMPTY_KB_MESSAGE",
     "NO_RESULTS_MESSAGE",
+    "GRAPH_UNAVAILABLE_MESSAGE",
     "clear_cache",
 ]

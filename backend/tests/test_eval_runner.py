@@ -28,7 +28,17 @@ class LoadDatasetTests(unittest.TestCase):
         tasks = load_dataset()
         self.assertGreaterEqual(len(tasks), 20)
         self.assertEqual(tasks[0].id, "eval-001")
-        self.assertIn(tasks[0].category, {"file_reading", "skills", "terminal", "knowledge_retrieval", "multi_turn_context"})
+        self.assertIn(tasks[0].category, {"file_reading", "skills", "terminal", "knowledge_retrieval", "multi_turn_context", "graph_retrieval"})
+
+    def test_load_dataset_includes_graph_retrieval_tasks(self) -> None:
+        tasks = load_dataset()
+        graph_tasks = [task for task in tasks if task.category == "graph_retrieval"]
+
+        self.assertGreaterEqual(len(graph_tasks), 5)
+        for task in graph_tasks:
+            self.assertIn("graph_retrieval", task.tags)
+            self.assertIn("multi_hop", task.tags)
+            self.assertIn("search_knowledge_base", task.required_tools)
 
     def test_load_dataset_rejects_non_array(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -43,7 +53,7 @@ class LoadProfilesTests(unittest.TestCase):
         profiles = load_profiles()
         self.assertEqual(
             [profile.id for profile in profiles],
-            ["baseline", "no_memory", "no_skills", "no_retrieval"],
+            ["baseline", "no_memory", "no_skills", "no_retrieval", "no_graph_retrieval"],
         )
 
     def test_select_profiles_filters_requested_ids(self) -> None:
@@ -157,6 +167,35 @@ class RunAndWriteTests(unittest.TestCase):
             output = write_markdown_report(report, Path(tmp) / "reports" / "latest.md")
             self.assertTrue(output.exists())
             self.assertIn("no_skills", output.read_text(encoding="utf-8"))
+
+    def test_render_markdown_report_includes_graph_retrieval_section(self) -> None:
+        tasks = [
+            EvaluationTask(
+                "graph-task",
+                "graph_retrieval",
+                "p",
+                "e",
+                ["graph_retrieval", "multi_hop"],
+                ["search_knowledge_base"],
+            )
+        ]
+        profiles = [
+            EvalProfile("baseline", "Full capability baseline.", []),
+            EvalProfile(
+                "no_graph_retrieval",
+                "Disable graph expansion.",
+                ["graph_retrieval"],
+            ),
+        ]
+
+        report = run_profiles(tasks, profiles)
+        markdown = render_markdown_report(report)
+
+        self.assertIn("## Graph-Assisted Retrieval Check", markdown)
+        self.assertIn("multi-hop questions", markdown)
+        self.assertIn("no_graph_retrieval", markdown)
+        self.assertIn("Baseline-style retrieval without graph expansion.", markdown)
+        self.assertLess(report["profiles"][1]["task_success_rate"], 1.0)
 
 
 if __name__ == "__main__":

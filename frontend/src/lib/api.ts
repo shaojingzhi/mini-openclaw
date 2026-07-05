@@ -1,4 +1,4 @@
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8002";
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8002";
 
 export type ModelSettings = {
   apiKey: string;
@@ -69,7 +69,29 @@ export type TraceDetail = {
   friendly_message: string | null;
   recoverable: boolean | null;
   retry_count: number;
+  graph_retrieval?: GraphRetrievalMetadata | null;
   events: Array<{ timestamp: string; kind: string; payload: Record<string, unknown> }>;
+};
+
+export type GraphRetrievalMetadata = {
+  direct_node_ids: string[];
+  expanded_node_ids: string[];
+  edge_types: string[];
+  evidence_count: number;
+};
+
+export type GraphSummary = {
+  schema_version: number | null;
+  node_count: number;
+  edge_count: number;
+  node_counts: Record<string, number>;
+  edge_counts: Record<string, number>;
+  sources: Record<string, string>;
+};
+
+export type GraphNodeDetail = {
+  node: Record<string, unknown>;
+  edges: Array<Record<string, unknown>>;
 };
 
 export type FilePayload = {
@@ -311,4 +333,47 @@ export async function getTrace(traceId: string): Promise<TraceDetail> {
   );
 
   return (await response.json()) as TraceDetail;
+}
+
+export async function getGraphSummary(): Promise<{ available: boolean; summary: GraphSummary }> {
+  const response = await assertResponseOk(
+    await fetch(buildApiUrl("/api/graph"), {
+      cache: "no-store",
+    }),
+    "getGraphSummary",
+  );
+
+  return (await response.json()) as { available: boolean; summary: GraphSummary };
+}
+
+export async function getGraphNode(nodeId: string): Promise<GraphNodeDetail> {
+  const response = await assertResponseOk(
+    await fetch(buildApiUrl(`/api/graph/nodes/${encodeURIComponent(nodeId)}`), {
+      cache: "no-store",
+    }),
+    "getGraphNode",
+  );
+
+  return (await response.json()) as GraphNodeDetail;
+}
+
+export async function runGraphDemo(
+  message: string,
+  sessionId: string,
+): Promise<{ reply: string; trace_id: string }> {
+  const response = await assertResponseOk(
+    await fetch(buildApiUrl("/api/graph/demo"), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        message,
+        session_id: sessionId,
+      }),
+    }),
+    "runGraphDemo",
+  );
+
+  return (await response.json()) as { reply: string; trace_id: string };
 }

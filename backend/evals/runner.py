@@ -132,6 +132,12 @@ def _task_uses_capability(task: EvaluationTask, capability: str) -> bool:
         "memory": {"memory", "session", "multi_turn_context"},
         "skills": {"skills"},
         "retrieval": {"knowledge", "knowledge_retrieval"},
+        "graph_retrieval": {
+            "graph",
+            "graph_assisted",
+            "graph_retrieval",
+            "multi_hop_retrieval",
+        },
     }
     aliases = capability_aliases.get(capability, {capability})
     haystack = set(task.tags)
@@ -363,8 +369,55 @@ def render_markdown_report(report: dict[str, Any]) -> str:
                 f"{float(row.get('average_latency_delta_ms', 0.0)):+.2f} |"
             )
 
+    graph_rows = _graph_retrieval_rows(report)
+    if graph_rows:
+        lines.extend(
+            [
+                "",
+                "## Graph-Assisted Retrieval Check",
+                "",
+                "Graph-assisted retrieval is most useful for multi-hop questions that need to connect knowledge docs, skills, workspace files, and traces. It is unnecessary for simple keyword lookups where the direct retrieval result already contains the answer.",
+                "",
+                "| Profile | Graph Tasks | Graph Success | Interpretation |",
+                "| --- | ---: | ---: | --- |",
+            ]
+        )
+        for row in graph_rows:
+            lines.append(
+                "| "
+                f"{row['profile_id']} | "
+                f"{row['task_count']} | "
+                f"{row['success_rate']:.4f} | "
+                f"{row['interpretation']} |"
+            )
+
     lines.append("")
     return "\n".join(lines)
+
+
+def _graph_retrieval_rows(report: dict[str, Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for profile in report.get("profiles", []):
+        breakdown = profile.get("category_breakdown", {})
+        graph_stats = breakdown.get("graph_retrieval")
+        if not graph_stats:
+            continue
+        task_count = int(graph_stats.get("count", 0))
+        success_rate = float(graph_stats.get("success_rate", 0.0))
+        profile_id = str(profile.get("profile_id", "unknown"))
+        if "graph_retrieval" in profile.get("disabled_capabilities", []):
+            interpretation = "Baseline-style retrieval without graph expansion."
+        else:
+            interpretation = "Graph-assisted retrieval enabled for multi-hop evidence."
+        rows.append(
+            {
+                "profile_id": profile_id,
+                "task_count": task_count,
+                "success_rate": success_rate,
+                "interpretation": interpretation,
+            }
+        )
+    return rows
 
 
 def write_markdown_report(report: dict[str, Any], output_path: str | Path) -> Path:

@@ -18,5 +18,10 @@
     "id": "no_retrieval",
     "description": "Ablation profile that disables knowledge retrieval.",
     "disabled_capabilities": ["retrieval"]
+  },
+  {
+    "id": "no_graph_retrieval",
+    "description": "Ablation profile that disables graph-assisted retrieval while keeping direct knowledge retrieval available.",
+    "disabled_capabilities": ["graph_retrieval"]
   }
 ]

@@ -12,6 +12,7 @@ import importlib
 
 from backend.tools.search_knowledge_base import (
     EMPTY_KB_MESSAGE,
+    GRAPH_UNAVAILABLE_MESSAGE,
     NO_RESULTS_MESSAGE,
     clear_cache,
     search_knowledge_base,
@@ -64,11 +65,39 @@ class SearchKnowledgeBaseSeededTests(unittest.TestCase):
         clear_cache()
         self._k = patch.object(sk_mod, "KNOWLEDGE_DIR", knowledge)
         self._s = patch.object(sk_mod, "STORAGE_DIR", self._tmp / "storage")
+        self._graph = patch.object(
+            sk_mod,
+            "expand_graph_evidence",
+            return_value={
+                "available": True,
+                "direct_node_ids": ["document:direct"],
+                "expanded_node_ids": ["skill:expanded"],
+                "edge_types": ["mentions", "uses_tool"],
+                "evidence": [
+                    {
+                        "id": "document:direct",
+                        "type": "document",
+                        "label": "notes.md",
+                        "path": "backend/knowledge/notes.md",
+                        "metadata": {},
+                    },
+                    {
+                        "id": "skill:expanded",
+                        "type": "skill",
+                        "label": "resume_story_coach",
+                        "path": "backend/skills/resume_story_coach/SKILL.md",
+                        "metadata": {},
+                    },
+                ],
+            },
+        )
         self._k.start()
         self._s.start()
+        self._graph.start()
 
     def tearDown(self) -> None:
         clear_cache()
+        self._graph.stop()
         self._k.stop()
         self._s.stop()
         shutil.rmtree(self._tmp, ignore_errors=True)
@@ -79,6 +108,38 @@ class SearchKnowledgeBaseSeededTests(unittest.TestCase):
         self.assertIn("notes.md", out)
         # Document body content was returned.
         self.assertIn("Marshmallow Recipe", out)
+        self.assertNotIn("Graph-expanded evidence", out)
+
+    def test_graph_mode_appends_related_evidence(self) -> None:
+        out = search_knowledge_base.invoke(
+            {"query": "marshmallow", "use_graph": True}
+        )
+        self.assertIn("Direct matches:", out)
+        self.assertIn("Marshmallow Recipe", out)
+        self.assertIn("Graph-expanded evidence:", out)
+        self.assertIn("resume_story_coach", out)
+        self.assertIn("Traversed edge types: mentions, uses_tool", out)
+
+    def test_graph_mode_reports_missing_graph(self) -> None:
+        self._graph.stop()
+        self._graph = patch.object(
+            sk_mod,
+            "expand_graph_evidence",
+            return_value={
+                "available": False,
+                "direct_node_ids": [],
+                "expanded_node_ids": [],
+                "edge_types": [],
+                "evidence": [],
+            },
+        )
+        self._graph.start()
+
+        out = search_knowledge_base.invoke(
+            {"query": "marshmallow", "use_graph": True}
+        )
+
+        self.assertIn(GRAPH_UNAVAILABLE_MESSAGE, out)
 
     def test_persists_index_to_storage_dir(self) -> None:
         # First call triggers the build + persist path.

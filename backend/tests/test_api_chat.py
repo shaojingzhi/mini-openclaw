@@ -36,6 +36,29 @@ class _StreamingAgent:
         yield {"type": "final", "data": {"content": "hello back"}}
 
 
+class _GraphStreamingAgent:
+    async def astream_events(self, payload, version="v2"):
+        yield {"type": "thought", "data": {"content": "graph thinking"}}
+        yield {
+            "type": "tool_call",
+            "data": {
+                "name": "search_knowledge_base",
+                "input": {
+                    "query": "connect eval notes to interview demo",
+                    "use_graph": True,
+                },
+            },
+        }
+        yield {
+            "type": "tool_result",
+            "data": {
+                "name": "search_knowledge_base",
+                "content": "Direct matches:\n...\n\nGraph-expanded evidence:\n...",
+            },
+        }
+        yield {"type": "final", "data": {"content": "graph answer"}}
+
+
 class _InvokeAgent:
     def __init__(self) -> None:
         self.payloads: list[dict[str, object]] = []
@@ -100,6 +123,44 @@ class ApiChatTests(unittest.TestCase):
         self.assertEqual(trace["model_name"], os.getenv("OPENAI_MODEL", "gpt-4o-mini"))
         self.assertEqual(len(trace["tool_calls"]), 1)
         self.assertEqual(len(trace["events"]), 5)
+
+    def test_streaming_graph_search_records_trace_metadata(self) -> None:
+        agent = _GraphStreamingAgent()
+        graph_result = {
+            "available": True,
+            "direct_node_ids": ["document:eval"],
+            "expanded_node_ids": ["workspace:demo", "trace:last"],
+            "edge_types": ["mentions", "contains"],
+            "evidence": [{"id": "document:eval"}, {"id": "workspace:demo"}],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            traces_dir = tmp_path / "traces"
+            data_users_dir = tmp_path / "users"
+            with patch.object(ss_mod, "SESSIONS_DIR", tmp_path), patch.object(us_mod, "DATA_USERS_DIR", data_users_dir), patch.object(tr_mod, "TRACES_DIR", traces_dir), patch.object(
+                app_mod, "build_agent", return_value=agent
+            ), patch.object(app_mod.graph_index, "expand_graph_evidence", return_value=graph_result) as expand_graph:
+                client = TestClient(app_mod.app)
+                response = client.post(
+                    "/api/chat",
+                    json={"message": "run graph demo", "session_id": "main", "stream": True},
+                )
+                trace_files = list(traces_dir.glob("*.json"))
+                trace = json.loads(trace_files[0].read_text(encoding="utf-8"))
+
+        self.assertEqual(response.status_code, 200)
+        expand_graph.assert_called_once_with("connect eval notes to interview demo")
+        self.assertEqual(
+            trace["graph_retrieval"],
+            {
+                "direct_node_ids": ["document:eval"],
+                "expanded_node_ids": ["workspace:demo", "trace:last"],
+                "edge_types": ["mentions", "contains"],
+                "evidence_count": 2,
+            },
+        )
+        self.assertEqual(trace["events"][-2]["kind"], "graph_retrieval")
+        self.assertIn("Graph-expanded evidence", response.text)
 
     def test_non_streaming_chat_returns_json_and_persists_messages(self) -> None:
         agent = _InvokeAgent()

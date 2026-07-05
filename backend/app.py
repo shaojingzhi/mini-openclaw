@@ -22,6 +22,7 @@ from fastapi.responses import JSONResponse
 
 from backend.graph.agent import build_agent
 from backend import sessions_store, traces_store
+from backend.graph import index as graph_index
 from backend.runtime_errors import classify_runtime_failure, runtime_error_payload, should_retry_runtime_failure
 from backend.user_locks import run_with_user_lock
 from backend.user_state import DEFAULT_USER_ID, normalize_user_id, user_memory_dir, user_sessions_dir, user_workspace_dir
@@ -73,6 +74,12 @@ class ChatRequest(BaseModel):
 class FileWriteRequest(BaseModel):
     path: str
     content: str
+
+
+class GraphDemoRequest(BaseModel):
+    session_id: str
+    message: str
+    query: str | None = None
 
 
 class SessionMessage(BaseModel):
@@ -162,6 +169,81 @@ def _extract_final_reply(result: Any) -> str:
 
 def _agent_error_message(error: Exception) -> str:
     return str(error).strip() or error.__class__.__name__
+
+
+def _coerce_tool_input(raw_input: Any) -> dict[str, Any]:
+    if isinstance(raw_input, dict):
+        return raw_input
+    if isinstance(raw_input, str):
+        try:
+            parsed = json.loads(raw_input)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _graph_query_from_tool_call(payload: dict[str, Any]) -> str | None:
+    if payload.get("name") != "search_knowledge_base":
+        return None
+
+    tool_input = _coerce_tool_input(payload.get("input"))
+    if tool_input.get("use_graph") is not True:
+        return None
+    query = tool_input.get("query")
+    return query.strip() if isinstance(query, str) and query.strip() else None
+
+
+def _record_graph_retrieval(trace: dict[str, Any], query: str) -> None:
+    graph_result = graph_index.expand_graph_evidence(query)
+    _record_graph_result(trace, graph_result)
+
+
+def _record_graph_result(trace: dict[str, Any], graph_result: dict[str, Any]) -> None:
+    metadata = {
+        "direct_node_ids": graph_result.get("direct_node_ids", []),
+        "expanded_node_ids": graph_result.get("expanded_node_ids", []),
+        "edge_types": graph_result.get("edge_types", []),
+        "evidence_count": len(graph_result.get("evidence", [])),
+    }
+    trace["graph_retrieval"] = metadata
+    traces_store.append_event(trace, kind="graph_retrieval", payload=metadata)
+
+
+def _format_graph_demo_reply(query: str, graph_result: dict[str, Any]) -> str:
+    if not graph_result.get("available"):
+        return (
+            "Graph-assisted retrieval is not available yet. Rebuild the graph with "
+            "`python -m backend.graph.index`, then run this demo again."
+        )
+
+    evidence = graph_result.get("evidence", []) or []
+    lines = [
+        "Graph-assisted retrieval demo completed.",
+        "",
+        f"Query: {query}",
+        "",
+        "What graph expansion added:",
+        f"- Direct nodes matched: {len(graph_result.get('direct_node_ids', []))}",
+        f"- Expanded nodes reached: {len(graph_result.get('expanded_node_ids', []))}",
+        f"- Evidence items surfaced: {len(evidence)}",
+        f"- Edge types traversed: {', '.join(graph_result.get('edge_types', [])) or 'none'}",
+    ]
+    if evidence:
+        lines.extend(["", "Evidence preview:"])
+        for node in evidence[:5]:
+            path = node.get("path")
+            suffix = f" ({path})" if path else ""
+            lines.append(
+                f"- {node.get('type', 'node')}: {node.get('label', 'untitled')}{suffix}"
+            )
+    lines.extend(
+        [
+            "",
+            "Interview-safe framing: this is Graph-RAG-inspired graph-assisted retrieval over local files and traces, not full community-summarization GraphRAG.",
+        ]
+    )
+    return "\n".join(lines)
 
 
 def _record_retry(trace: dict[str, Any], *, category: str, detail: str) -> None:
@@ -268,12 +350,22 @@ async def _chat_sse(request: ChatRequest, *, user_id: str) -> AsyncIterator[dict
     payload = {"messages": sessions_store.load_session(request.session_id, user_id=user_id)}
     final_text = ""
     streamed_output_started = False
+    pending_graph_query: str | None = None
 
     while True:
         try:
             async for event_type, event_payload in _stream_agent_events(agent, payload):
                 streamed_output_started = True
+                if event_type == "tool_call":
+                    pending_graph_query = _graph_query_from_tool_call(event_payload)
                 traces_store.append_event(trace, kind=event_type, payload=event_payload)
+                if (
+                    event_type == "tool_result"
+                    and event_payload.get("name") == "search_knowledge_base"
+                    and pending_graph_query
+                ):
+                    _record_graph_retrieval(trace, pending_graph_query)
+                    pending_graph_query = None
                 if event_type == "final":
                     final_text = _coerce_text(event_payload.get("content", ""))
                 yield {
@@ -484,6 +576,91 @@ def get_trace(trace_id: str) -> dict[str, Any]:
     if trace is None:
         raise HTTPException(status_code=404, detail="trace not found")
     return trace
+
+
+@app.get("/api/graph")
+def get_graph_summary() -> dict[str, Any]:
+    graph = graph_index.load_graph()
+    if graph is None:
+        return {
+            "available": False,
+            "summary": {
+                "schema_version": None,
+                "node_count": 0,
+                "edge_count": 0,
+                "node_counts": {},
+                "edge_counts": {},
+                "sources": {},
+            },
+        }
+    return {"available": True, "summary": graph_index.graph_summary(graph)}
+
+
+@app.get("/api/graph/nodes/{node_id}")
+def get_graph_node(node_id: str) -> dict[str, Any]:
+    graph = graph_index.load_graph()
+    if graph is None:
+        raise HTTPException(status_code=404, detail="graph not found")
+    for node in graph.get("nodes", []):
+        if node.get("id") == node_id:
+            edges = [
+                edge
+                for edge in graph.get("edges", [])
+                if edge.get("source") == node_id or edge.get("target") == node_id
+            ]
+            return {"node": node, "edges": edges}
+    raise HTTPException(status_code=404, detail="graph node not found")
+
+
+@app.post("/api/graph/demo")
+async def run_graph_demo(
+    request: GraphDemoRequest,
+    x_user_id: str | None = Header(default=None),
+) -> dict[str, str]:
+    user_id = normalize_user_id(x_user_id)
+    query = (
+        request.query
+        or "Mini-OpenClaw eval notes interview demo skills runtime diagnostics"
+    )
+    await _append_session_message(
+        request.session_id,
+        {"role": "user", "content": request.message},
+        user_id=user_id,
+    )
+    trace = traces_store.create_trace(
+        session_id=request.session_id,
+        model_name="graph-demo-local",
+        user_id=user_id,
+    )
+    traces_store.append_event(trace, kind="user_message", payload={"content": request.message})
+    traces_store.append_event(
+        trace,
+        kind="tool_call",
+        payload={
+            "name": "search_knowledge_base",
+            "input": {"query": query, "use_graph": True},
+        },
+    )
+    graph_result = graph_index.expand_graph_evidence(query)
+    _record_graph_result(trace, graph_result)
+    reply = _format_graph_demo_reply(query, graph_result)
+    traces_store.append_event(
+        trace,
+        kind="tool_result",
+        payload={
+            "name": "search_knowledge_base",
+            "content": reply,
+        },
+    )
+    traces_store.append_event(trace, kind="final", payload={"content": reply})
+    traces_store.finalize_trace(trace, final_status="success")
+    traces_store.save_trace(trace)
+    await _append_session_message(
+        request.session_id,
+        {"role": "assistant", "content": reply},
+        user_id=user_id,
+    )
+    return {"reply": reply, "trace_id": str(trace["trace_id"])}
 
 
 if __name__ == "__main__":

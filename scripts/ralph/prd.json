@@ -545,6 +545,76 @@
       "priority": 10,
       "passes": true,
       "notes": "Added a focused interview-prep knowledge pack under `backend/knowledge/interview/`, two dedicated interview skills, a workspace prompt sheet (`INTERVIEW_DEMO.md`), and a frontend Interview Demo prompt launcher. Also documented the demo workflow and screenshot checklist in `docs/interview-demo-pack.md`, regenerated `SKILLS_SNAPSHOT.md`, and exposed the demo assets directly in the inspector so the project can be shown as a concrete hiring-facing assistant instead of a generic chat shell."
+    },
+    {
+      "id": "US-111",
+      "title": "Build file-backed graph index for agent knowledge",
+      "description": "As a developer, I need a lightweight graph index over Mini-OpenClaw's knowledge, skills, workspace docs, and traces so graph-assisted retrieval can be implemented without adding a heavy graph database.",
+      "acceptanceCriteria": [
+        "Create a backend graph module that extracts nodes and edges from `backend/knowledge/`, `backend/skills/`, `backend/workspace/`, and trace JSON files",
+        "Persist the graph as deterministic JSON under `backend/data/graph/knowledge_graph.json`",
+        "Represent node types for document, skill, workspace_file, trace, tool, concept, and heading",
+        "Represent edge types including contains, references, uses_tool, failed_at, and mentions",
+        "Provide a public rebuild function and a CLI entry point for regenerating the graph",
+        "Gracefully handle missing or empty source directories",
+        "Add unit tests for extraction, deterministic persistence, and empty-source behavior",
+        "Tests pass"
+      ],
+      "priority": 11,
+      "passes": true,
+      "notes": "Implemented backend.graph.index as a lightweight file-backed knowledge graph builder over knowledge, skills, workspace files, and traces. Graph JSON persists under backend/data/graph/knowledge_graph.json, with deterministic nodes/edges, a CLI entry point via python -m backend.graph.index, graceful empty-source handling, and unit tests covering extraction, persistence, and rebuild behavior."
+    },
+    {
+      "id": "US-112",
+      "title": "Add graph-assisted expansion to knowledge retrieval",
+      "description": "As an agent, I need search_knowledge_base to optionally expand retrieval through the local graph so answers can use related skills, workspace docs, and trace evidence beyond direct keyword matches.",
+      "acceptanceCriteria": [
+        "Extend `search_knowledge_base` with a graph-assisted mode that uses the persisted graph when available",
+        "Keep existing BM25/vector retrieval behavior as the baseline path",
+        "Implement one-hop or two-hop expansion from directly matched nodes to related evidence nodes",
+        "Return a readable result that separates direct matches from graph-expanded evidence",
+        "Return a friendly fallback when the graph file is missing or stale",
+        "Add tests proving graph expansion surfaces related evidence not present in the direct match text",
+        "Add tests proving baseline retrieval still works when graph mode is disabled",
+        "Tests pass"
+      ],
+      "priority": 12,
+      "passes": true,
+      "notes": "Extended search_knowledge_base with optional graph-assisted retrieval via use_graph=true. The baseline BM25/vector path remains unchanged by default, while graph mode appends direct matches plus graph-expanded evidence and a friendly missing-graph fallback. Added tests for graph expansion, unavailable graph behavior, and baseline preservation."
+    },
+    {
+      "id": "US-113",
+      "title": "Expose graph retrieval diagnostics in APIs and traces",
+      "description": "As a developer, I need graph retrieval to be observable so interview demos can explain which nodes and edges influenced an answer.",
+      "acceptanceCriteria": [
+        "Add backend API support for graph summaries and graph node detail lookup",
+        "Trace records include graph retrieval metadata when graph-assisted search is used",
+        "Metadata includes direct node ids, expanded node ids, edge types traversed, and evidence count",
+        "Frontend runtime diagnostics can display graph retrieval metadata for a trace",
+        "Missing graph metadata renders as a neutral empty state",
+        "Add backend tests for graph summary/detail APIs",
+        "Add or update frontend type definitions for the graph diagnostic payload",
+        "Relevant checks pass"
+      ],
+      "priority": 13,
+      "passes": true,
+      "notes": "Added graph summary and graph node detail APIs, initialized trace records with graph_retrieval metadata, extended frontend trace types, and added a compact graph retrieval diagnostics card in the runtime trace panel. Backend graph API tests and frontend typecheck pass."
+    },
+    {
+      "id": "US-114",
+      "title": "Add Graph RAG eval and interview demo narrative",
+      "description": "As a hiring-facing developer, I need a small evaluation and demo story that proves graph-assisted retrieval improves multi-hop agent questions without overselling the implementation.",
+      "acceptanceCriteria": [
+        "Add at least five multi-hop eval tasks that benefit from graph-assisted retrieval",
+        "Add an eval profile or report section comparing baseline retrieval with graph-assisted retrieval",
+        "Document when graph-assisted retrieval helps and when it is unnecessary",
+        "Update the interview demo materials with a concise Graph RAG explanation",
+        "Add a screenshot or demo checklist item for graph retrieval diagnostics",
+        "Relevant tests and eval rendering checks pass"
+      ],
+      "priority": 14,
+      "passes": true,
+      "notes": "Added five graph_retrieval multi-hop eval tasks, a no_graph_retrieval ablation profile, and a Markdown report section that compares graph-enabled vs graph-disabled behavior for graph tasks. Updated interview demo docs and workspace prompt sheet with concise Graph-RAG-inspired wording, clear limits versus full community-summarization GraphRAG, and screenshot checklist coverage for graph retrieval diagnostics."
     }
   ]
 }

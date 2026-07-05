@@ -174,5 +174,45 @@
     "expected": "Summarizes resume/interview value from local knowledge.",
     "tags": ["knowledge", "resume"],
     "required_tools": ["search_knowledge_base"]
+  },
+  {
+    "id": "eval-021",
+    "category": "graph_retrieval",
+    "prompt": "Use graph-assisted knowledge retrieval to connect Mini-OpenClaw's eval notes with the interview demo pack, then explain why measurability makes the project stronger for an AI agent interview.",
+    "expected": "Connects evaluation guidance with interview positioning instead of summarizing only one direct document.",
+    "tags": ["knowledge", "graph_retrieval", "multi_hop", "interview", "evals"],
+    "required_tools": ["search_knowledge_base"]
+  },
+  {
+    "id": "eval-022",
+    "category": "graph_retrieval",
+    "prompt": "Use graph-assisted retrieval to find how interview skills, the prompt sheet, and runtime diagnostics support one coherent hiring demo.",
+    "expected": "Links interview skills, INTERVIEW_DEMO.md, and diagnostics into a single demo narrative.",
+    "tags": ["knowledge", "graph_retrieval", "multi_hop", "skills", "diagnostics"],
+    "required_tools": ["search_knowledge_base"]
+  },
+  {
+    "id": "eval-023",
+    "category": "graph_retrieval",
+    "prompt": "Use graph-assisted retrieval to explain when file-based memory should remain the source of truth and when retrieval or graph expansion is helpful.",
+    "expected": "Distinguishes transparent file memory from retrieval and graph-assisted expansion with concrete tradeoffs.",
+    "tags": ["knowledge", "graph_retrieval", "multi_hop", "memory", "retrieval"],
+    "required_tools": ["search_knowledge_base"]
+  },
+  {
+    "id": "eval-024",
+    "category": "graph_retrieval",
+    "prompt": "Use graph-assisted retrieval to identify which project surfaces would help debug a failed knowledge-retrieval answer in a demo.",
+    "expected": "Connects failure handling, traces, graph diagnostics, and relevant docs instead of naming only one artifact.",
+    "tags": ["knowledge", "graph_retrieval", "multi_hop", "failure_handling", "traces"],
+    "required_tools": ["search_knowledge_base"]
+  },
+  {
+    "id": "eval-025",
+    "category": "graph_retrieval",
+    "prompt": "Use graph-assisted retrieval to produce a concise Graph-RAG-inspired interview explanation that avoids claiming full community-summarization GraphRAG.",
+    "expected": "Explains graph-assisted retrieval as lightweight, inspectable, and limited, with clear non-overselling language.",
+    "tags": ["knowledge", "graph_retrieval", "multi_hop", "graph_assisted", "interview"],
+    "required_tools": ["search_knowledge_base"]
   }
 ]

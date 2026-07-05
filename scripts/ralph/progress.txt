@@ -651,3 +651,73 @@ Started: 2026年 6月 4日 星期四 00时57分56秒 CST
   - Frontend “seed prompt” affordances are a cheap way to make a demo repeatable; they reduce setup friction and help reviewers discover the intended scenario quickly.
   - Regenerating `SKILLS_SNAPSHOT.md` is part of shipping any new skill content, not just core agent features; otherwise the prompt surface can drift from what the repo actually exposes.
 ---
+
+## 2026-07-05 Graph-assisted RAG / US-111
+- Added a lightweight file-backed graph index for agent knowledge.
+- Files changed:
+  - `backend/graph/index.py` (new — extracts document, skill, workspace_file, trace, tool, concept, and heading nodes; emits contains/references/uses_tool/failed_at/mentions edges; persists deterministic JSON)
+  - `backend/tests/test_graph_index.py` (new — extraction, deterministic persistence, empty-source, and rebuild coverage)
+  - `.gitignore` (ignores generated `backend/data/graph/` runtime graph output)
+  - `scripts/ralph/prd.json` (added US-111..US-114 Graph-assisted RAG stories and marked US-111 complete)
+- Verification:
+  - `.venv/bin/python -W ignore -m unittest backend.tests.test_graph_index -v` -> 4/4 OK
+  - `.venv/bin/python -W ignore -m unittest backend.tests.test_search_knowledge_base backend.tests.test_traces_store -v` -> 8/8 OK
+  - `.venv/bin/python -m backend.graph.index` -> wrote 168 nodes and 197 edges to `backend/data/graph/knowledge_graph.json`
+- Notes:
+  - Ralph child process could not run in sandbox because Codex needed to write `~/.codex`; escalated Ralph was rejected because the script can commit/push automatically. This story was completed manually using the same one-story Ralph workflow, without pushing.
+- **Learnings for future iterations:**
+  - Keep Graph RAG lightweight and inspectable: a deterministic JSON graph is enough for interview/demo value before introducing external graph databases.
+  - Graph index modules should keep source roots patchable at module level so tests can use temp directories without touching real knowledge, skills, workspace, or trace files.
+  - Generated graph output belongs under `backend/data/graph/` and should stay gitignored; source code and tests prove the graph can be rebuilt.
+---
+
+## 2026-07-05 Graph-assisted RAG / US-112
+- Added optional graph-assisted expansion to `search_knowledge_base` while preserving baseline retrieval by default.
+- Files changed:
+  - `backend/graph/index.py` (added graph loading, summary, and query-neighborhood expansion helpers)
+  - `backend/tools/search_knowledge_base.py` (added `use_graph` parameter and direct-match plus graph-expanded evidence formatting)
+  - `backend/tests/test_search_knowledge_base.py` (added graph mode, missing graph, and baseline preservation coverage)
+  - `scripts/ralph/prd.json` (marked US-112 complete)
+- Verification:
+  - `.venv/bin/python -W ignore -m unittest backend.tests.test_search_knowledge_base -v` -> 7/7 OK
+  - `.venv/bin/python -W ignore -m unittest backend.tests.test_graph_index -v` -> 4/4 OK
+- **Learnings for future iterations:**
+  - Graph-assisted retrieval should be opt-in at the tool boundary until demos prove it is consistently better than baseline retrieval.
+  - Returning direct matches and graph-expanded evidence as separate sections keeps the behavior explainable for interview demos and future trace UI.
+---
+
+## 2026-07-05 Graph-assisted RAG / US-113
+- Exposed graph diagnostics through backend APIs and the existing trace panel.
+- Files changed:
+  - `backend/app.py` (added `GET /api/graph` and `GET /api/graph/nodes/{node_id}`)
+  - `backend/traces_store.py` (initialized `graph_retrieval` metadata on new traces)
+  - `frontend/src/lib/api.ts` (added graph diagnostic types and graph API helpers)
+  - `frontend/src/app/page.tsx` (shows graph retrieval metadata or a neutral empty state in the trace panel)
+  - `backend/tests/test_api_traces.py` (added graph summary/detail/missing-node API coverage)
+  - `scripts/ralph/prd.json` (marked US-113 complete)
+- Verification:
+  - `.venv/bin/python -W ignore -m unittest backend.tests.test_api_traces backend.tests.test_traces_store backend.tests.test_graph_index -v` -> 13/13 OK
+  - `npm run typecheck --prefix frontend` -> PASS
+- **Learnings for future iterations:**
+  - Graph diagnostics fit naturally into the existing trace panel as metadata; they do not need a separate product surface yet.
+  - Keep graph summary/detail APIs read-only and tolerant of missing graph files so local demos do not fail before a graph rebuild.
+---
+
+## 2026-07-05 Graph-assisted RAG / US-114
+- Added a Graph-RAG-inspired eval and interview narrative without overselling the implementation.
+- Files changed:
+  - `backend/evals/datasets/core_tasks.json` (added five `graph_retrieval` multi-hop tasks)
+  - `backend/evals/profiles.json` (added `no_graph_retrieval` ablation profile)
+  - `backend/evals/runner.py` (added graph retrieval capability aliases and a Markdown report section for graph tasks)
+  - `backend/tests/test_eval_runner.py` (added dataset/profile/report coverage for graph-assisted retrieval)
+  - `docs/interview-demo-pack.md` and `backend/workspace/INTERVIEW_DEMO.md` (added concise Graph-RAG-inspired explanation and diagnostics checklist items)
+  - `scripts/ralph/prd.json` (marked US-114 complete)
+- Verification:
+  - `.venv/bin/python -W ignore -m unittest backend.tests.test_eval_runner -v` -> 12/12 OK
+  - `.venv/bin/python -W ignore -m unittest backend.tests.test_eval_runner backend.tests.test_graph_index backend.tests.test_search_knowledge_base backend.tests.test_api_traces backend.tests.test_traces_store -v` -> 32/32 OK
+  - `.venv/bin/python -m backend.evals.runner --dataset backend/evals/datasets/core_tasks.json --output /tmp/mini-openclaw-graph-eval.json` -> wrote JSON and Markdown reports with 25 tasks and 5 profiles
+- **Learnings for future iterations:**
+  - The strongest interview phrasing is “graph-assisted retrieval over local files and traces,” not “full GraphRAG.”
+  - Eval tasks should encode the multi-hop situations where graph expansion is expected to help; otherwise graph retrieval looks like unnecessary architectural ornament.
+  - Demo checklists need an observable UI artifact, such as graph retrieval diagnostics, so the feature is visible rather than only described.
+---

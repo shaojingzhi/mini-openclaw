@@ -25,6 +25,16 @@ class RuntimeErrorClassificationTests(unittest.TestCase):
         self.assertEqual(failure.category, "model_invalid_format")
         self.assertTrue(failure.recoverable)
 
+    def test_classifies_expired_api_key_as_auth_error(self) -> None:
+        failure = rt_mod.classify_runtime_failure(
+            RuntimeError(
+                "Error code: 401 - {'error': {'message': '该令牌已过期'}}"
+            )
+        )
+        self.assertEqual(failure.category, "model_auth_error")
+        self.assertFalse(failure.recoverable)
+        self.assertIn("API key", failure.friendly_message)
+
     def test_classifies_memory_read_failure(self) -> None:
         failure = rt_mod.classify_runtime_failure(RuntimeError("memory read failed: permission denied"))
         self.assertEqual(failure.category, "memory_read_failure")
@@ -44,6 +54,8 @@ class RuntimeErrorClassificationTests(unittest.TestCase):
         self.assertTrue(rt_mod.should_retry_runtime_failure(failure, retry_count=0, streamed_output_started=False))
         self.assertFalse(rt_mod.should_retry_runtime_failure(failure, retry_count=1, streamed_output_started=False))
         self.assertFalse(rt_mod.should_retry_runtime_failure(failure, retry_count=0, streamed_output_started=True))
+        auth_failure = rt_mod.classify_runtime_failure(RuntimeError("401 token expired"))
+        self.assertFalse(rt_mod.should_retry_runtime_failure(auth_failure, retry_count=0, streamed_output_started=False))
 
 
 if __name__ == "__main__":

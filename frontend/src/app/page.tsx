@@ -22,7 +22,7 @@ import { Toaster, toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { getFile, getSession, getTrace, listSessions, listTraces, saveFile, streamChat, type ChatEvent, type ModelSettings, type SessionSummary, type TraceDetail, type TraceSummary } from "@/lib/api";
+import { getFile, getGraphSummary, getSession, getTrace, listSessions, listTraces, runGraphDemo, saveFile, streamChat, type ChatEvent, type GraphSummary, type ModelSettings, type SessionSummary, type TraceDetail, type TraceSummary } from "@/lib/api";
 
 const MonacoEditor = dynamic(() => import("@/components/monaco-markdown-editor").then((module) => module.MonacoMarkdownEditor), {
   ssr: false,
@@ -87,6 +87,9 @@ const interviewDemoPrompts = [
   "Compare the engineering value of evals, observability, and user isolation in this project.",
   "Rewrite Mini-OpenClaw into a STAR story about improving an AI agent from prototype to credible engineering project.",
 ] as const;
+
+const graphRagDemoPrompt =
+  "Use search_knowledge_base with use_graph=true to connect Mini-OpenClaw's eval notes, interview demo pack, skills, and runtime diagnostics. Explain what the graph-expanded evidence adds beyond direct matches, and keep the answer honest: this is graph-assisted retrieval, not full community-summarization GraphRAG.";
 
 const MODEL_SETTINGS_STORAGE_KEY = "mini-openclaw-model-settings";
 const LAYOUT_SIZES_STORAGE_KEY = "mini-openclaw-layout-sizes";
@@ -319,6 +322,9 @@ export default function Home() {
   const [traceDetails, setTraceDetails] = useState<Record<string, TraceDetail>>({});
   const [traceStatus, setTraceStatus] = useState<TraceStatus>("idle");
   const [activeTraceId, setActiveTraceId] = useState<string>("");
+  const [graphSummary, setGraphSummary] = useState<GraphSummary | null>(null);
+  const [isGraphAvailable, setIsGraphAvailable] = useState(false);
+  const [graphStatus, setGraphStatus] = useState<TraceStatus>("idle");
   const [draft, setDraft] = useState("Ask the agent to inspect a skill, fetch a file, or explain the current session.");
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamError, setStreamError] = useState<string | null>(null);
@@ -360,6 +366,20 @@ export default function Home() {
     } catch {
       setTraceSummaries([]);
       setTraceStatus("error");
+    }
+  }
+
+  async function refreshGraphSummary() {
+    try {
+      setGraphStatus("loading");
+      const payload = await getGraphSummary();
+      setIsGraphAvailable(payload.available);
+      setGraphSummary(payload.summary);
+      setGraphStatus("ready");
+    } catch {
+      setIsGraphAvailable(false);
+      setGraphSummary(null);
+      setGraphStatus("error");
     }
   }
   const stageHeadingRef = useRef<HTMLHeadingElement | null>(null);
@@ -540,6 +560,7 @@ export default function Home() {
 
   useEffect(() => {
     void refreshTraces();
+    void refreshGraphSummary();
   }, []);
 
   useEffect(() => {
@@ -790,6 +811,13 @@ export default function Home() {
     composerRef.current?.focus();
   }
 
+  function handleGraphDemoPromptSelect() {
+    setDraft(graphRagDemoPrompt);
+    setActiveNav("chat");
+    focusRightPanel("traces");
+    composerRef.current?.focus();
+  }
+
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -820,6 +848,44 @@ export default function Home() {
     }));
 
     try {
+      if (trimmed === graphRagDemoPrompt) {
+        const result = await runGraphDemo(trimmed, activeSessionId);
+        setMessages((current) => {
+          const nextMessages = [...(current[activeSessionId] ?? [])];
+          const index = nextMessages.findIndex((message) => message.id === assistantId && message.role === "assistant");
+
+          if (index === -1) {
+            return current;
+          }
+
+          nextMessages[index] = {
+            id: assistantId,
+            role: "assistant",
+            content: result.reply,
+            trace: [
+              {
+                kind: "tool_call",
+                name: "search_knowledge_base",
+                input: { use_graph: true, source: "Graph RAG Demo" },
+              },
+              {
+                kind: "tool_result",
+                name: "search_knowledge_base",
+                content: "Graph-expanded evidence recorded in Runtime diagnostics.",
+              },
+            ],
+          };
+
+          return {
+            ...current,
+            [activeSessionId]: nextMessages,
+          };
+        });
+        await refreshTraces(result.trace_id);
+        focusRightPanel("traces");
+        return;
+      }
+
       for await (const chatEvent of streamChat(trimmed, activeSessionId, modelSettings)) {
         setMessages((current) => {
           const nextMessages = [...(current[activeSessionId] ?? [])];
@@ -1147,6 +1213,35 @@ export default function Home() {
                           <FileText className="mr-2 h-4 w-4" />
                           Open sheet
                         </Button>
+                      </div>
+                      <div className="mt-4 rounded-2xl border border-sky-200 bg-[linear-gradient(135deg,#ecfeff,#f8fafc)] p-4 shadow-sm">
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                          <div>
+                            <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-sky-600">Graph RAG spotlight</p>
+                            <h4 className="mt-2 text-sm font-semibold text-slate-950">Graph-assisted retrieval demo</h4>
+                            <p className="mt-1 text-sm leading-6 text-slate-600">
+                              Sends a prompt that asks the agent to call <span className="font-medium text-slate-800">search_knowledge_base</span> with <span className="font-medium text-slate-800">use_graph=true</span>, then check Runtime diagnostics for graph evidence.
+                            </p>
+                          </div>
+                          <Button className="h-10 shrink-0 rounded-xl bg-sky-600 px-4 text-white hover:bg-sky-700" onClick={handleGraphDemoPromptSelect} type="button">
+                            <FolderTree className="mr-2 h-4 w-4" />
+                            Graph RAG Demo
+                          </Button>
+                        </div>
+                        <div className="mt-3 grid gap-2 text-xs text-slate-600 sm:grid-cols-3">
+                          <div className="rounded-xl border border-white/80 bg-white/70 px-3 py-2">
+                            <p className="font-semibold text-slate-500">Index</p>
+                            <p className="mt-1 text-slate-900">{graphStatus === "loading" ? "Loading" : isGraphAvailable ? "Available" : "Missing"}</p>
+                          </div>
+                          <div className="rounded-xl border border-white/80 bg-white/70 px-3 py-2">
+                            <p className="font-semibold text-slate-500">Nodes</p>
+                            <p className="mt-1 text-slate-900">{graphSummary?.node_count ?? 0}</p>
+                          </div>
+                          <div className="rounded-xl border border-white/80 bg-white/70 px-3 py-2">
+                            <p className="font-semibold text-slate-500">Edges</p>
+                            <p className="mt-1 text-slate-900">{graphSummary?.edge_count ?? 0}</p>
+                          </div>
+                        </div>
                       </div>
                       <div className="mt-4 grid gap-2">
                         {interviewDemoPrompts.map((prompt) => (
@@ -1506,6 +1601,20 @@ export default function Home() {
                               {activeTrace.retry_count > 0 ? <p className="mt-1">Retries: {activeTrace.retry_count}</p> : null}
                               {activeTrace.friendly_message ? <p className="mt-2 text-rose-700">{activeTrace.friendly_message}</p> : null}
                             </div>
+                            {activeTrace.graph_retrieval ? (
+                              <div className="rounded-2xl border border-sky-100 bg-sky-50 p-4 text-sm text-sky-950">
+                                <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-sky-500">Graph retrieval</p>
+                                <p className="mt-2 font-semibold">Graph-assisted retrieval active</p>
+                                <p className="mt-2">Evidence: {activeTrace.graph_retrieval.evidence_count}</p>
+                                <p className="mt-1">Direct nodes: {activeTrace.graph_retrieval.direct_node_ids.length}</p>
+                                <p className="mt-1">Expanded nodes: {activeTrace.graph_retrieval.expanded_node_ids.length}</p>
+                                <p className="mt-1">Edges: {activeTrace.graph_retrieval.edge_types.length > 0 ? activeTrace.graph_retrieval.edge_types.join(", ") : "none"}</p>
+                              </div>
+                            ) : (
+                              <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-4 text-sm text-slate-500">
+                                No graph retrieval metadata for this trace. Use the Graph RAG Demo prompt and send it to populate direct nodes, expanded nodes, and traversed edges here.
+                              </div>
+                            )}
                             {activeTrace.events.map((event, index) => (
                               <div key={`${activeTrace.trace_id}-${index}`} className="rounded-2xl border border-slate-200 bg-white p-4">
                                 <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-400">{event.kind}</p>
@@ -1617,7 +1726,7 @@ export default function Home() {
                               value={modelSettings.apiKey}
                             />
                             <p className="text-xs leading-5 text-slate-400">
-                              If this local key has expired, clear it and Mini-OpenClaw will fall back to the backend default key.
+                              If this local key has expired, clear it or click Use backend key so Mini-OpenClaw falls back to the backend default key.
                             </p>
                           </div>
                         </div>

@@ -48,6 +48,7 @@ def create_trace(
         "friendly_message": None,
         "recoverable": None,
         "retry_count": 0,
+        "graph_retrieval": None,
     }
 
 

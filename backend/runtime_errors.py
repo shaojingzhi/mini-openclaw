@@ -26,6 +26,25 @@ def classify_runtime_failure(error: Exception) -> RuntimeFailure:
     detail = str(error).strip() or error.__class__.__name__
     lowered = detail.lower()
 
+    if (
+        "401" in lowered
+        or "unauthorized" in lowered
+        or "invalid api key" in lowered
+        or "incorrect api key" in lowered
+        or "expired" in lowered
+        or "令牌已过期" in detail
+        or ("token" in lowered and "expired" in lowered)
+    ):
+        return RuntimeFailure(
+            category="model_auth_error",
+            detail=detail,
+            friendly_message=(
+                "The model API key is invalid or expired. Clear the local API key "
+                "in Request settings or enter a valid key, then try again."
+            ),
+            recoverable=False,
+        )
+
     if isinstance(error, TimeoutError) or "timeout" in lowered or "timed out" in lowered:
         return RuntimeFailure(
             category="tool_timeout",
