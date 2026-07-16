@@ -22,6 +22,17 @@ class PythonReplToolTests(unittest.TestCase):
         )
         self.assertEqual(out.splitlines(), ["4.0", "3"])
 
+    def test_blocks_filesystem_write_attempt(self) -> None:
+        out = python_repl.invoke({"query": "open('/tmp/mini-openclaw-owned', 'w')"})
+
+        self.assertIn("blocked unsafe code", out)
+        self.assertIn("open", out)
+
+    def test_timeout_returns_friendly_error(self) -> None:
+        out = python_repl.invoke({"query": "while True:\n    pass"})
+
+        self.assertIn("timed out", out)
+
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

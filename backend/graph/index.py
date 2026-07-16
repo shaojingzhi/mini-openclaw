@@ -15,13 +15,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-PROJECT_ROOT: Path = Path(__file__).resolve().parents[2]
-KNOWLEDGE_DIR: Path = PROJECT_ROOT / "backend" / "knowledge"
-SKILLS_DIR: Path = PROJECT_ROOT / "backend" / "skills"
-WORKSPACE_DIR: Path = PROJECT_ROOT / "backend" / "workspace"
-TRACES_DIR: Path = PROJECT_ROOT / "backend" / "data" / "traces"
-GRAPH_DIR: Path = PROJECT_ROOT / "backend" / "data" / "graph"
-GRAPH_PATH: Path = GRAPH_DIR / "knowledge_graph.json"
+from backend.settings import get_settings
+
+PROJECT_ROOT: Path = get_settings().project_root
+KNOWLEDGE_DIR: Path = get_settings().knowledge_dir
+SKILLS_DIR: Path = get_settings().skills_dir
+WORKSPACE_DIR: Path = get_settings().workspace_dir
+TRACES_DIR: Path = get_settings().traces_dir
+GRAPH_DIR: Path = get_settings().graph_dir
+GRAPH_PATH: Path = get_settings().graph_path
 
 TEXT_SUFFIXES: set[str] = {".md", ".txt"}
 TOOL_NAMES: set[str] = {

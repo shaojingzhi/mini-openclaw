@@ -615,6 +615,74 @@
       "priority": 14,
       "passes": true,
       "notes": "Added five graph_retrieval multi-hop eval tasks, a no_graph_retrieval ablation profile, and a Markdown report section that compares graph-enabled vs graph-disabled behavior for graph tasks. Updated interview demo docs and workspace prompt sheet with concise Graph-RAG-inspired wording, clear limits versus full community-summarization GraphRAG, and screenshot checklist coverage for graph retrieval diagnostics."
+    },
+    {
+      "id": "US-115",
+      "title": "Add retrieval quality metrics and a labeled eval set",
+      "description": "As a hiring-facing developer, I need measurable retrieval quality signals so Mini-OpenClaw can show whether graph-assisted retrieval actually improves evidence discovery.",
+      "acceptanceCriteria": [
+        "Add a small labeled retrieval eval dataset with queries and relevant document or graph node ids",
+        "Compute retrieval metrics including Recall@K, MRR, Hit@1, and nDCG@K",
+        "Compare baseline retrieval against graph-assisted retrieval in a machine-readable JSON report",
+        "Render the retrieval metric comparison in the Markdown eval report",
+        "Keep the implementation offline and deterministic for CI/demo repeatability",
+        "Add unit tests for metric calculations, dataset loading, comparison aggregation, and Markdown rendering",
+        "Tests pass"
+      ],
+      "priority": 15,
+      "passes": true,
+      "notes": "Added a labeled offline retrieval eval dataset with five multi-hop interview/demo cases, metric helpers for Recall@K, MRR, Hit@1, and nDCG@K, and a deterministic baseline vs graph_assisted comparison in the JSON eval report. The Markdown renderer now includes a Retrieval Quality Metrics section with per-strategy scores and deltas, and tests cover dataset loading, metric math, aggregation, and report rendering."
+    },
+    {
+      "id": "US-116",
+      "title": "Harden python_repl with subprocess isolation",
+      "description": "As a developer, I need python_repl to execute snippets out of process with guardrails so demo and interview reviewers can trust the sandbox story.",
+      "acceptanceCriteria": [
+        "Execute Python snippets in a subprocess instead of the backend process",
+        "Enforce a timeout and return a friendly timeout error",
+        "Run with a minimized environment and controlled working directory",
+        "Apply CPU or memory resource limits where the platform supports them, with graceful fallback on macOS",
+        "Preserve existing behavior for simple arithmetic and standard-library imports such as math",
+        "Add tests for successful execution, timeout handling, and sandbox guardrails",
+        "Tests pass"
+      ],
+      "priority": 16,
+      "passes": true,
+      "notes": "Replaced the in-process LangChain PythonREPLTool wrapper with a subprocess-backed implementation using isolated Python mode, a temporary working directory, minimized environment, timeout handling, and best-effort CPU/memory resource limits. Added AST-based guardrails for unsafe imports, filesystem/process calls, and preserved arithmetic plus safe standard-library imports such as math. Tests cover success, math import, blocked filesystem writes, timeout/resource-limit friendly errors, and agent tool registration regressions."
+    },
+    {
+      "id": "US-117",
+      "title": "Centralize runtime configuration with Pydantic Settings",
+      "description": "As a maintainer, I need typed runtime configuration so model endpoints, storage paths, graph options, and tool limits are visible and overrideable without scattered constants.",
+      "acceptanceCriteria": [
+        "Add a backend settings module based on Pydantic Settings or an equivalent typed fallback if the installed Pydantic version lacks pydantic-settings",
+        "Centralize defaults for model provider/base URL/API key, retrieval top_k, graph path, storage directories, and tool timeout values",
+        "Load values from environment variables and optional .env files",
+        "Update low-risk backend modules to read settings instead of duplicating constants",
+        "Document the important environment variables for local demo setup",
+        "Add tests for defaults and environment overrides",
+        "Tests pass"
+      ],
+      "priority": 17,
+      "passes": true,
+      "notes": "Added backend/settings.py as a typed Pydantic BaseModel configuration center with .env/environment loading and pydantic-settings-style behavior without adding a new dependency. Centralized OpenAI-compatible provider settings, backend host/port/CORS, knowledge/storage/graph paths, retrieval top_k, workspace/memory/skills/traces paths, and python_repl timeout/memory limits. Wired low-risk modules including app startup/CORS/model-name resolution, graph agent model construction, graph index defaults, search_knowledge_base paths/top_k, and python_repl limits. Added runtime configuration docs and tests for defaults plus env overrides."
+    },
+    {
+      "id": "US-118",
+      "title": "Mirror eval datasets into LangSmith and keep local reports as fallback",
+      "description": "As a maintainer, I need Mini-OpenClaw's eval datasets mirrored into LangSmith so future experiments can compare runs without losing the local offline report flow.",
+      "acceptanceCriteria": [
+        "Add LangSmith configuration for API key, endpoint, and project name",
+        "Export the existing core task and retrieval quality datasets into LangSmith datasets/examples",
+        "Expose a CLI or runner flag that syncs local eval data to LangSmith without requiring the network by default",
+        "Keep the current JSON and Markdown reports working when LangSmith is unavailable",
+        "Add tests for dataset conversion, sync skip behavior, and offline fallback",
+        "Document the LangSmith eval workflow and required environment variables",
+        "Tests pass"
+      ],
+      "priority": 18,
+      "passes": true,
+      "notes": "Added a LangSmith eval sync layer that mirrors the existing core task and retrieval quality datasets into LangSmith datasets/examples when an API key is configured. The runner now supports `--langsmith-sync`, writes the sync result into JSON and Markdown reports, and safely falls back to local-only reports when LangSmith is unavailable. Added LangSmith settings, a pinned direct langsmith dependency, workflow docs, and tests for dataset sync creation, existing-dataset skip behavior, no-key fallback, settings overrides, and Markdown rendering."
     }
   ]
 }

@@ -10,11 +10,15 @@ from pathlib import Path
 from backend.evals.runner import (
     EvalProfile,
     EvaluationTask,
+    RetrievalEvalCase,
     RunResult,
     aggregate_report,
+    compute_retrieval_metrics,
     load_dataset,
     load_profiles,
+    load_retrieval_eval_dataset,
     render_markdown_report,
+    run_retrieval_evaluation,
     run_dataset,
     run_profiles,
     select_profiles,
@@ -46,6 +50,24 @@ class LoadDatasetTests(unittest.TestCase):
             path.write_text('{"oops": true}', encoding="utf-8")
             with self.assertRaises(ValueError):
                 load_dataset(path)
+
+
+class LoadRetrievalEvalDatasetTests(unittest.TestCase):
+    def test_load_retrieval_eval_dataset_reads_labeled_cases(self) -> None:
+        cases = load_retrieval_eval_dataset()
+
+        self.assertGreaterEqual(len(cases), 5)
+        self.assertEqual(cases[0].id, "rq-001")
+        self.assertIn("baseline", cases[0].strategies)
+        self.assertIn("graph_assisted", cases[0].strategies)
+        self.assertGreaterEqual(len(cases[0].relevant_ids), 2)
+
+    def test_load_retrieval_eval_dataset_rejects_non_array(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "bad.json"
+            path.write_text('{"oops": true}', encoding="utf-8")
+            with self.assertRaises(ValueError):
+                load_retrieval_eval_dataset(path)
 
 
 class LoadProfilesTests(unittest.TestCase):
@@ -91,6 +113,58 @@ class AggregateReportTests(unittest.TestCase):
         report = aggregate_report([], [])
         self.assertEqual(report["task_success_rate"], 0.0)
         self.assertEqual(report["failure_category_distribution"], {})
+
+
+class RetrievalMetricsTests(unittest.TestCase):
+    def test_compute_retrieval_metrics_scores_ranked_results(self) -> None:
+        metrics = compute_retrieval_metrics(
+            ["miss", "rel-b", "rel-a", "other"],
+            ["rel-a", "rel-b", "rel-c"],
+            top_k=3,
+        )
+
+        self.assertEqual(metrics["recall_at_k"], 0.6667)
+        self.assertEqual(metrics["mrr"], 0.5)
+        self.assertEqual(metrics["hit_at_1"], 0.0)
+        self.assertEqual(metrics["ndcg_at_k"], 0.5307)
+
+    def test_compute_retrieval_metrics_rejects_invalid_k(self) -> None:
+        with self.assertRaises(ValueError):
+            compute_retrieval_metrics(["a"], ["a"], top_k=0)
+
+    def test_run_retrieval_evaluation_compares_strategies(self) -> None:
+        cases = [
+            RetrievalEvalCase(
+                id="case-1",
+                query="q1",
+                relevant_ids=["a", "b"],
+                strategies={
+                    "baseline": ["a", "x", "y"],
+                    "graph_assisted": ["a", "b", "x"],
+                },
+            ),
+            RetrievalEvalCase(
+                id="case-2",
+                query="q2",
+                relevant_ids=["c"],
+                strategies={
+                    "baseline": ["x", "c"],
+                    "graph_assisted": ["c", "x"],
+                },
+            ),
+        ]
+
+        report = run_retrieval_evaluation(cases, top_k=2)
+
+        self.assertEqual(report["case_count"], 2)
+        self.assertEqual(report["strategies"], ["baseline", "graph_assisted"])
+        self.assertEqual(report["summary"]["baseline"]["recall_at_k"], 0.75)
+        self.assertEqual(report["summary"]["graph_assisted"]["recall_at_k"], 1.0)
+        self.assertEqual(
+            report["comparison_vs_baseline"][0]["recall_at_k_delta"],
+            0.25,
+        )
+        self.assertEqual(len(report["cases"]), 4)
 
 
 class RunAndWriteTests(unittest.TestCase):
@@ -196,6 +270,61 @@ class RunAndWriteTests(unittest.TestCase):
         self.assertIn("no_graph_retrieval", markdown)
         self.assertIn("Baseline-style retrieval without graph expansion.", markdown)
         self.assertLess(report["profiles"][1]["task_success_rate"], 1.0)
+
+    def test_render_markdown_report_includes_retrieval_quality_metrics(self) -> None:
+        tasks = [
+            EvaluationTask("retrieval-task", "knowledge_retrieval", "p", "e", ["knowledge"], ["search_knowledge_base"])
+        ]
+        profiles = [EvalProfile("baseline", "Full capability baseline.", [])]
+        retrieval_cases = [
+            RetrievalEvalCase(
+                id="case-1",
+                query="q1",
+                relevant_ids=["a", "b"],
+                strategies={
+                    "baseline": ["a", "x"],
+                    "graph_assisted": ["a", "b"],
+                },
+            )
+        ]
+
+        report = run_profiles(
+            tasks,
+            profiles,
+            retrieval_cases=retrieval_cases,
+            retrieval_top_k=2,
+        )
+        markdown = render_markdown_report(report)
+
+        self.assertIn("## Retrieval Quality Metrics", markdown)
+        self.assertIn("| Strategy | Cases | Recall@K | MRR | Hit@1 | nDCG@K |", markdown)
+        self.assertIn("graph_assisted", markdown)
+        self.assertIn("Recall@K Δ", markdown)
+
+    def test_render_markdown_report_includes_langsmith_sync_section(self) -> None:
+        tasks = [EvaluationTask("task-1", "skills", "p", "e", [], [])]
+        profiles = [EvalProfile("baseline", "Full capability baseline.", [])]
+        report = run_profiles(tasks, profiles)
+        report["langsmith_sync"] = {
+            "enabled": True,
+            "project_name": "mini-openclaw-evals",
+            "reason": "",
+            "datasets": [
+                {
+                    "name": "mini-openclaw-core-tasks",
+                    "status": "created",
+                    "example_count": 1,
+                    "dataset_id": "dataset-id",
+                    "note": "",
+                }
+            ],
+        }
+
+        markdown = render_markdown_report(report)
+
+        self.assertIn("## LangSmith Sync", markdown)
+        self.assertIn("mini-openclaw-core-tasks", markdown)
+        self.assertIn("dataset-id", markdown)
 
 
 if __name__ == "__main__":

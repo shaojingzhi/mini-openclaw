@@ -94,6 +94,31 @@ export type GraphNodeDetail = {
   edges: Array<Record<string, unknown>>;
 };
 
+export type EvalJobStatus = "queued" | "running" | "completed" | "failed";
+
+export type EvalJobResult = {
+  output: string;
+  markdown_output: string;
+  dataset_size: number;
+  profiles: string[];
+  langsmith_sync: unknown;
+};
+
+export type EvalJobResponse = {
+  job_id: string;
+  status: EvalJobStatus;
+  created_at: string;
+  updated_at: string;
+  request: {
+    dataset_path: string;
+    profiles_path: string;
+    profile_ids: string[] | null;
+    sync_langsmith: boolean;
+  };
+  result: EvalJobResult | null;
+  error: string | null;
+};
+
 export type FilePayload = {
   path: string;
   content: string;
@@ -376,4 +401,40 @@ export async function runGraphDemo(
   );
 
   return (await response.json()) as { reply: string; trace_id: string };
+}
+
+export async function runEval(options?: {
+  sync_langsmith?: boolean;
+  dataset_path?: string;
+  profiles_path?: string;
+  profile_ids?: string[];
+}): Promise<EvalJobResponse> {
+  const response = await assertResponseOk(
+    await fetch(buildApiUrl("/api/evals/run"), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        sync_langsmith: options?.sync_langsmith ?? false,
+        dataset_path: options?.dataset_path,
+        profiles_path: options?.profiles_path,
+        profile_ids: options?.profile_ids,
+      }),
+    }),
+    "runEval",
+  );
+
+  return (await response.json()) as EvalJobResponse;
+}
+
+export async function getEvalJob(jobId: string): Promise<EvalJobResponse> {
+  const response = await assertResponseOk(
+    await fetch(buildApiUrl(`/api/evals/jobs/${encodeURIComponent(jobId)}`), {
+      cache: "no-store",
+    }),
+    "getEvalJob",
+  );
+
+  return (await response.json()) as EvalJobResponse;
 }

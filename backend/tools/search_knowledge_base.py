@@ -27,11 +27,13 @@ from threading import Lock
 from typing import Any, Iterable
 
 from backend.graph.index import expand_graph_evidence
+from backend.settings import get_settings
 from langchain_core.tools import tool
 
 PROJECT_ROOT: Path = Path(__file__).resolve().parents[2]
-KNOWLEDGE_DIR: Path = PROJECT_ROOT / "backend" / "knowledge"
-STORAGE_DIR: Path = PROJECT_ROOT / "backend" / "storage"
+KNOWLEDGE_DIR: Path = get_settings().knowledge_dir
+STORAGE_DIR: Path = get_settings().storage_dir
+RETRIEVAL_TOP_K: int = get_settings().retrieval_top_k
 
 EMPTY_KB_MESSAGE: str = (
     "Knowledge base is empty: no readable files were found under "
@@ -125,11 +127,11 @@ def _build_hybrid_retriever(knowledge_dir: Path, storage_dir: Path) -> Any | Non
     index = _build_or_load_index(knowledge_dir, storage_dir)
     nodes = list(index.docstore.docs.values())
 
-    bm25 = BM25Retriever.from_defaults(nodes=nodes, similarity_top_k=5)
-    vector = VectorIndexRetriever(index=index, similarity_top_k=5)
+    bm25 = BM25Retriever.from_defaults(nodes=nodes, similarity_top_k=RETRIEVAL_TOP_K)
+    vector = VectorIndexRetriever(index=index, similarity_top_k=RETRIEVAL_TOP_K)
     return QueryFusionRetriever(
         retrievers=[bm25, vector],
-        similarity_top_k=5,
+        similarity_top_k=RETRIEVAL_TOP_K,
         num_queries=1,
         mode="reciprocal_rerank",
         use_async=False,
@@ -215,6 +217,7 @@ __all__ = [
     "PROJECT_ROOT",
     "KNOWLEDGE_DIR",
     "STORAGE_DIR",
+    "RETRIEVAL_TOP_K",
     "EMPTY_KB_MESSAGE",
     "NO_RESULTS_MESSAGE",
     "GRAPH_UNAVAILABLE_MESSAGE",

@@ -22,12 +22,15 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
   getFile,
+  getEvalJob,
   getGraphSummary,
   getTrace,
   listTraces,
+  runEval,
   runGraphDemo,
   saveFile,
   type GraphSummary,
+  type EvalJobResponse,
   type ModelSettings,
   type TraceDetail,
   type TraceSummary,
@@ -166,6 +169,9 @@ export function WorkbenchPage() {
   const [modelSettings, setModelSettings] = useState<ModelSettings>(defaultModelSettings);
   const [settingsSavedAt, setSettingsSavedAt] = useState<string | null>(null);
   const [isRunningGraphDemo, setIsRunningGraphDemo] = useState(false);
+  const [isRunningEval, setIsRunningEval] = useState(false);
+  const [activeEvalJobId, setActiveEvalJobId] = useState<string | null>(null);
+  const [evalJob, setEvalJob] = useState<EvalJobResponse | null>(null);
   const [activeResizeKey, setActiveResizeKey] = useState<LayoutSizeKey | null>(null);
   const initialInspectorLoad = useRef(false);
   const dragStateRef = useRef<{
@@ -408,6 +414,59 @@ export function WorkbenchPage() {
     });
   }, [traceSummaries]);
 
+  useEffect(() => {
+    if (!activeEvalJobId) {
+      return;
+    }
+
+    const jobId = activeEvalJobId;
+    let mounted = true;
+    let timer: number | null = null;
+
+    async function pollEvalJob() {
+      try {
+        const job = await getEvalJob(jobId);
+        if (!mounted) {
+          return;
+        }
+
+        setEvalJob(job);
+        if (job.status === "completed") {
+          setIsRunningEval(false);
+          toast.success("Eval finished", {
+            description: job.result ? `Saved ${job.result.output}` : "Report is ready.",
+          });
+          return;
+        }
+
+        if (job.status === "failed") {
+          setIsRunningEval(false);
+          toast.error("Eval failed", { description: job.error ?? "Unknown eval error" });
+          return;
+        }
+
+        timer = window.setTimeout(pollEvalJob, 1500);
+      } catch (error) {
+        if (!mounted) {
+          return;
+        }
+        const message = error instanceof Error ? error.message : "Failed to read eval job status";
+        setIsRunningEval(false);
+        toast.error("Eval status failed", { description: message });
+      }
+    }
+
+    setIsRunningEval(true);
+    void pollEvalJob();
+
+    return () => {
+      mounted = false;
+      if (timer) {
+        window.clearTimeout(timer);
+      }
+    };
+  }, [activeEvalJobId]);
+
   const selectedInspectorFile = inspectorFiles.find((item) => item.path === selectedInspectorPath) ?? null;
   const selectedInspectorLabel = selectedInspectorFile?.label ?? selectedInspectorPath;
   const isDirty = initialInspectorLoad.current && loadedFilePath === selectedInspectorPath && editorValue !== "";
@@ -488,6 +547,30 @@ export function WorkbenchPage() {
       toast.error("Graph demo failed", { description: message });
     } finally {
       setIsRunningGraphDemo(false);
+    }
+  }
+
+  async function handleRunEval() {
+    if (isRunningEval) {
+      return;
+    }
+
+    setIsRunningEval(true);
+    try {
+      const job = await runEval();
+      setEvalJob(job);
+      setActiveEvalJobId(job.job_id);
+      toast.success("Eval queued", {
+        description: `Job ${job.job_id} is running in the background.`,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Eval failed";
+      const hint =
+        /not found|404/i.test(message) && !/runEval failed/i.test(message)
+          ? "The backend likely needs a restart so it can load /api/evals/run."
+          : message;
+      toast.error("Eval failed", { description: hint });
+      setIsRunningEval(false);
     }
   }
 
@@ -620,11 +703,42 @@ export function WorkbenchPage() {
                     <FileText className="mr-2 h-4 w-4" />
                     Open demo sheet
                   </Button>
+                  <Button className="h-10 w-full justify-start rounded-xl border-slate-200 bg-white text-slate-700 hover:bg-slate-50" disabled={isRunningEval} onClick={handleRunEval} type="button" variant="outline">
+                    {isRunningEval ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <FileCode2 className="mr-2 h-4 w-4" />}
+                    Run Eval
+                  </Button>
                   <Button className="h-10 w-full justify-start rounded-xl bg-sky-600 text-white hover:bg-sky-700" disabled={isRunningGraphDemo} onClick={handleRunGraphDemo} type="button">
                     {isRunningGraphDemo ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <History className="mr-2 h-4 w-4" />}
                     Run Graph RAG trace
                   </Button>
                 </div>
+                {evalJob ? (
+                  <div
+                    className={[
+                      "mt-4 rounded-[16px] border p-3 text-xs leading-5",
+                      evalJob.status === "failed"
+                        ? "border-rose-200 bg-rose-50/80 text-rose-950"
+                        : evalJob.status === "completed"
+                          ? "border-emerald-200 bg-emerald-50/80 text-emerald-950"
+                          : "border-sky-200 bg-sky-50/80 text-sky-950",
+                    ].join(" ")}
+                  >
+                    <p className="font-semibold uppercase tracking-[0.2em]">Eval job</p>
+                    <p className="mt-2 text-sm font-medium">Status: {evalJob.status}</p>
+                    <p className="mt-1 break-all">Job: {evalJob.job_id}</p>
+                    {evalJob.result ? (
+                      <>
+                        <p className="mt-2 text-sm font-medium">Dataset: {evalJob.result.dataset_size} tasks</p>
+                        <p className="mt-1 break-all">Report: {evalJob.result.output}</p>
+                        <p className="mt-1 break-all">Markdown: {evalJob.result.markdown_output}</p>
+                        <p className="mt-1">Profiles: {evalJob.result.profiles.join(", ")}</p>
+                      </>
+                    ) : null}
+                    {evalJob.error ? (
+                      <p className="mt-2 break-words font-medium">Error: {evalJob.error}</p>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
             </aside>
 

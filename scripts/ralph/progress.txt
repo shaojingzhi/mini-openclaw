@@ -721,3 +721,76 @@ Started: 2026年 6月 4日 星期四 00时57分56秒 CST
   - Eval tasks should encode the multi-hop situations where graph expansion is expected to help; otherwise graph retrieval looks like unnecessary architectural ornament.
   - Demo checklists need an observable UI artifact, such as graph retrieval diagnostics, so the feature is visible rather than only described.
 ---
+
+## 2026-07-11 Retrieval quality metrics / US-115
+- Added deterministic retrieval-quality evaluation for baseline vs graph-assisted retrieval.
+- Files changed:
+  - `backend/evals/datasets/retrieval_quality.json` (new labeled multi-hop retrieval dataset with relevant evidence ids and per-strategy ranked candidates)
+  - `backend/evals/runner.py` (loads retrieval eval cases, computes Recall@K/MRR/Hit@1/nDCG@K, adds JSON and Markdown comparison output)
+  - `backend/tests/test_eval_runner.py` (metric math, dataset loading, aggregation, and Markdown rendering coverage)
+  - `scripts/ralph/prd.json` (marked US-115 complete)
+- Verification:
+  - `.venv/bin/python -W ignore -m unittest backend.tests.test_eval_runner -v` -> 18/18 OK
+  - `.venv/bin/python -m backend.evals.runner --dataset backend/evals/datasets/core_tasks.json --output /tmp/mini-openclaw-retrieval-eval.json` -> wrote JSON and Markdown reports with retrieval-quality metrics
+  - JSON spot check: baseline Recall@K 0.3000 vs graph_assisted Recall@K 1.0000; graph_assisted nDCG@K delta +0.5623
+- **Learnings for future iterations:**
+  - Interview-friendly Graph RAG should be measurable with simple retrieval metrics, not just presented as architecture.
+  - Keeping the first retrieval eval offline and deterministic makes it safe for CI and demos; live retriever wiring can come later without changing the metric contract.
+  - Recall@K and nDCG@K are better signals for graph expansion than Hit@1 when baseline already finds one obvious direct document.
+---
+
+## 2026-07-11 Python REPL subprocess sandbox / US-116
+- Hardened `python_repl` by moving execution out of the backend process.
+- Files changed:
+  - `backend/tools/python_repl.py` (subprocess execution with isolated Python mode, temp cwd, minimized env, timeout, best-effort CPU/memory limits, and AST guardrails)
+  - `backend/tests/test_python_repl.py` (added blocked filesystem-write and timeout coverage)
+  - `scripts/ralph/prd.json` (marked US-116 complete)
+- Verification:
+  - `.venv/bin/python -W ignore -m unittest backend.tests.test_python_repl -v` -> 5/5 OK
+  - `.venv/bin/python -W ignore -m unittest backend.tests.test_python_repl backend.tests.test_agent backend.tests.test_runtime_errors -v` -> 16/16 OK
+- **Learnings for future iterations:**
+  - On macOS, CPU limits may terminate tight loops before wall-clock timeout fires; map that signal to the same friendly timeout result.
+  - A lightweight AST denylist is not a perfect sandbox, but it materially improves the demo story before investing in container/chroot/seccomp isolation.
+  - Keeping math and similar safe imports working preserves the useful REPL behavior while blocking filesystem and process operations.
+---
+
+## 2026-07-11 Runtime configuration center / US-117
+- Added typed runtime configuration without introducing a new dependency.
+- Files changed:
+  - `backend/settings.py` (new Pydantic `RuntimeSettings` with `.env` and environment variable loading)
+  - `backend/app.py` (uses settings for CORS, project roots, model name, host, and port)
+  - `backend/graph/agent.py` (uses settings for OpenAI-compatible provider defaults)
+  - `backend/graph/index.py` (uses settings for graph/source directories and graph output path)
+  - `backend/tools/search_knowledge_base.py` (uses settings for knowledge/storage paths and retrieval top-k)
+  - `backend/tools/python_repl.py` (uses settings for timeout and memory limit)
+  - `backend/tests/test_settings.py` (defaults and env override coverage)
+  - `docs/runtime-configuration.md` (demo-facing env var reference)
+  - `scripts/ralph/prd.json` (marked US-117 complete)
+- Verification:
+  - `.venv/bin/python -W ignore -m unittest backend.tests.test_settings backend.tests.test_search_knowledge_base backend.tests.test_graph_index backend.tests.test_python_repl backend.tests.test_agent backend.tests.test_api_chat -v` -> 27/27 OK
+- **Learnings for future iterations:**
+  - A typed config module is enough for interview value; adding another dependency just to mirror `pydantic-settings` can wait.
+  - Path settings should preserve test patchability by staying as module-level defaults in graph/search modules.
+  - Config docs are part of the feature because provider switching was already a real pain point in this project.
+---
+
+## 2026-07-16 LangSmith eval dataset sync / US-118
+- Mirrored the local eval datasets into LangSmith as an optional sync step while keeping local JSON/Markdown reports as the default source of truth.
+- Files changed:
+  - `backend/evals/langsmith_sync.py` (new — builds LangSmith client when configured, exports core task and retrieval datasets, skips safely when LangSmith is unavailable)
+  - `backend/evals/runner.py` (added `--langsmith-sync`, writes sync summary into JSON/Markdown reports)
+  - `backend/settings.py` (added LangSmith API key/endpoint/project settings with env fallbacks)
+  - `backend/requirements.txt` (pinned direct `langsmith==0.8.14`)
+  - `backend/tests/test_langsmith_sync.py` (new — sync creation, existing-dataset skip, and unconfigured fallback coverage)
+  - `backend/tests/test_eval_runner.py` and `backend/tests/test_settings.py` (LangSmith report and settings coverage)
+  - `docs/langsmith-evals.md` and `docs/runtime-configuration.md` (workflow and env var docs)
+  - `scripts/ralph/prd.json` (marked US-118 complete)
+- Verification:
+  - `.venv/bin/python -W ignore -m unittest backend.tests.test_langsmith_sync backend.tests.test_eval_runner backend.tests.test_settings -v` -> 24/24 OK
+  - `.venv/bin/python -W ignore -m unittest discover -s backend/tests -v` -> 114/114 OK
+  - `.venv/bin/python -m backend.evals.runner --dataset backend/evals/datasets/core_tasks.json --output /tmp/mini-openclaw-langsmith-eval.json --langsmith-sync` -> local report written, LangSmith sync summary recorded as disabled because no API key is configured
+- **Learnings for future iterations:**
+  - For an offline-first project, LangSmith is a good experiment sink, but the first safe step is dataset sync, not forcing live network calls into every eval run.
+  - Keeping local Markdown/JSON output intact makes the migration low-risk and easy to review; we can add `evaluate(...)` / `evaluate_existing(...)` later as a separate story.
+  - Sample IDs for LangSmith `ExampleCreate` use `id`, not `example_id` — worth remembering before the first real sync.
+---

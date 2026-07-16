@@ -22,7 +22,6 @@ Environment variables (all optional with sensible defaults):
 
 from __future__ import annotations
 
-import os
 from typing import Any
 
 from langchain.agents import create_agent
@@ -30,6 +29,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_openai import ChatOpenAI
 
 from backend.prompt_assembler import build_system_prompt
+from backend.settings import get_settings
 from backend.tools import (
     fetch_url,
     python_repl,
@@ -37,8 +37,6 @@ from backend.tools import (
     search_knowledge_base,
     terminal,
 )
-
-DEFAULT_MODEL = "gpt-4o-mini"
 
 CORE_TOOLS = [terminal, python_repl, fetch_url, read_file, search_knowledge_base]
 
@@ -49,9 +47,10 @@ def _build_model(
     model: str | None = None,
 ) -> BaseChatModel:
     """Instantiate the OpenAI-compatible chat model from env vars or overrides."""
-    resolved_api_key = api_key or os.environ.get("OPENAI_API_KEY", "EMPTY")
-    resolved_base_url = base_url or os.environ.get("OPENAI_BASE_URL")
-    resolved_model = model or os.environ.get("OPENAI_MODEL", DEFAULT_MODEL)
+    settings = get_settings()
+    resolved_api_key = api_key or settings.openai_api_key
+    resolved_base_url = base_url or settings.openai_base_url
+    resolved_model = model or settings.openai_model
     kwargs: dict[str, Any] = {
         "model": resolved_model,
         "api_key": resolved_api_key,

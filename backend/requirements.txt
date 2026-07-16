@@ -9,6 +9,7 @@ sse-starlette==3.4.4
 # --- Validation / config ---
 pydantic==2.12.5
 python-dotenv==1.2.2
+langsmith==0.8.14
 
 # --- LangChain 1.x stable (Agent runtime) ---
 # create_agent lives in langchain.agents; langchain-community / -experimental

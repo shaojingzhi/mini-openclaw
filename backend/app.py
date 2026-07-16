@@ -9,7 +9,6 @@ import asyncio
 import json
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
-import os
 from pathlib import Path
 from typing import Any
 
@@ -17,33 +16,23 @@ from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sse_starlette import EventSourceResponse
-from dotenv import load_dotenv
 from fastapi.responses import JSONResponse
 
-from backend.graph.agent import build_agent
 from backend import sessions_store, traces_store
+from backend.evals.jobs import get_eval_job, submit_eval_job
+from backend.evals.runner import DEFAULT_DATASET_PATH, DEFAULT_PROFILES_PATH
+from backend.graph.agent import build_agent
 from backend.graph import index as graph_index
 from backend.runtime_errors import classify_runtime_failure, runtime_error_payload, should_retry_runtime_failure
+from backend.settings import get_settings
 from backend.user_locks import run_with_user_lock
 from backend.user_state import DEFAULT_USER_ID, normalize_user_id, user_memory_dir, user_sessions_dir, user_workspace_dir
 
-load_dotenv(Path(__file__).resolve().parents[1] / ".env")
-
 app: FastAPI = FastAPI(title="Mini-OpenClaw Backend")
-
-DEFAULT_CORS_ORIGINS: tuple[str, ...] = (
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-    "http://localhost:3004",
-    "http://127.0.0.1:3004",
-)
 
 
 def _cors_origins() -> list[str]:
-    raw_origins = os.getenv("MINI_OPENCLAW_CORS_ORIGINS")
-    if not raw_origins:
-        return list(DEFAULT_CORS_ORIGINS)
-    return [origin.strip() for origin in raw_origins.split(",") if origin.strip()]
+    return list(get_settings().cors_origins)
 
 
 app.add_middleware(
@@ -54,11 +43,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-PROJECT_ROOT: Path = Path(__file__).resolve().parents[1]
+PROJECT_ROOT: Path = get_settings().project_root
 ALLOWED_FILE_ROOTS: tuple[Path, ...] = (
-    PROJECT_ROOT / "backend" / "memory",
-    PROJECT_ROOT / "backend" / "workspace",
-    PROJECT_ROOT / "backend" / "skills",
+    get_settings().memory_dir,
+    get_settings().workspace_dir,
+    get_settings().skills_dir,
 )
 
 
@@ -82,13 +71,20 @@ class GraphDemoRequest(BaseModel):
     query: str | None = None
 
 
+class EvalRunRequest(BaseModel):
+    sync_langsmith: bool = False
+    dataset_path: str | None = None
+    profiles_path: str | None = None
+    profile_ids: list[str] | None = None
+
+
 class SessionMessage(BaseModel):
     role: str
     content: str
 
 
 def _resolve_model_name(request: ChatRequest) -> str:
-    return request.model or os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    return request.model or get_settings().openai_model
 
 
 def _allowed_file_roots_for_user(user_id: str) -> tuple[Path, ...]:
@@ -663,7 +659,31 @@ async def run_graph_demo(
     return {"reply": reply, "trace_id": str(trace["trace_id"])}
 
 
+@app.post("/api/evals/run")
+async def run_evals(request: EvalRunRequest) -> dict[str, Any]:
+    return submit_eval_job(
+        dataset_path=request.dataset_path or DEFAULT_DATASET_PATH,
+        profiles_path=request.profiles_path or DEFAULT_PROFILES_PATH,
+        profile_ids=request.profile_ids,
+        sync_langsmith=request.sync_langsmith,
+    )
+
+
+@app.get("/api/evals/jobs/{job_id}")
+def get_eval_job_status(job_id: str) -> dict[str, Any]:
+    job = get_eval_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="eval job not found")
+    return job
+
+
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("backend.app:app", host="0.0.0.0", port=8002, reload=False)
+    settings = get_settings()
+    uvicorn.run(
+        "backend.app:app",
+        host=settings.backend_host,
+        port=settings.backend_port,
+        reload=False,
+    )
