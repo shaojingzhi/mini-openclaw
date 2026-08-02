@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from backend.tools.fetch_url import fetch_url
 from backend.tools.python_repl import python_repl
+from backend.tools.propose_memory_update import build_propose_memory_update_tool
 from backend.tools.read_file import read_file
 from backend.tools.search_knowledge_base import search_knowledge_base
 from backend.tools.terminal import terminal
@@ -11,6 +12,7 @@ from backend.tools.terminal import terminal
 __all__ = [
     "fetch_url",
     "python_repl",
+    "build_propose_memory_update_tool",
     "read_file",
     "search_knowledge_base",
     "terminal",

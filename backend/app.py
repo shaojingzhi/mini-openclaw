@@ -23,6 +23,7 @@ from backend.evals.jobs import get_eval_job, submit_eval_job
 from backend.evals.runner import DEFAULT_DATASET_PATH, DEFAULT_PROFILES_PATH
 from backend.graph.agent import build_agent
 from backend.graph import index as graph_index
+from backend.memory import proposals_store
 from backend.runtime_errors import classify_runtime_failure, runtime_error_payload, should_retry_runtime_failure
 from backend.settings import get_settings
 from backend.user_locks import run_with_user_lock
@@ -76,6 +77,10 @@ class EvalRunRequest(BaseModel):
     dataset_path: str | None = None
     profiles_path: str | None = None
     profile_ids: list[str] | None = None
+
+
+class MemoryProposalDecisionRequest(BaseModel):
+    reason: str | None = None
 
 
 class SessionMessage(BaseModel):
@@ -255,6 +260,71 @@ def _record_retry(trace: dict[str, Any], *, category: str, detail: str) -> None:
     )
 
 
+def _build_chat_agent(
+    request: ChatRequest,
+    *,
+    user_id: str,
+    trace: dict[str, Any],
+) -> tuple[Any, list[dict[str, Any]]]:
+    all_approved_memories = proposals_store.list_proposals(user_id=user_id, status="approved")
+    approved_memories = list(
+        reversed(all_approved_memories[: proposals_store.MAX_BOOTSTRAP_MEMORIES])
+    )
+    omitted_proposal_ids = [
+        memory["proposal_id"]
+        for memory in all_approved_memories[proposals_store.MAX_BOOTSTRAP_MEMORIES :]
+    ]
+    approved_total = len(all_approved_memories)
+    layer_counts: dict[str, int] = {}
+    for memory in approved_memories:
+        target = str(memory["target"])
+        layer_counts[target] = layer_counts.get(target, 0) + 1
+    traces_store.append_event(
+        trace,
+        kind="memory_loaded",
+        payload={
+            "memory_count": len(approved_memories),
+            "approved_total": approved_total,
+            "omitted_count": len(omitted_proposal_ids),
+            "omitted_proposal_ids": omitted_proposal_ids,
+            "proposal_ids": [memory["proposal_id"] for memory in approved_memories],
+            "targets": [memory["target"] for memory in approved_memories],
+            "layer_counts": layer_counts,
+            "estimated_characters": sum(len(str(memory["content"])) for memory in approved_memories),
+        },
+    )
+    created_proposals: list[dict[str, Any]] = []
+    agent = build_agent(
+        api_key=request.api_key,
+        base_url=request.base_url,
+        model_name=request.model,
+        user_id=user_id,
+        session_id=request.session_id,
+        approved_memories=approved_memories,
+        on_memory_proposal_created=created_proposals.append,
+    )
+    return agent, created_proposals
+
+
+def _record_created_memory_proposals(
+    trace: dict[str, Any],
+    proposals: list[dict[str, Any]],
+) -> None:
+    for proposal in proposals:
+        traces_store.append_event(
+            trace,
+            kind="memory_proposal_created",
+            payload={
+                "proposal_id": proposal["proposal_id"],
+                "target": proposal["target"],
+                "memory_type": proposal["memory_type"],
+                "confidence": proposal["confidence"],
+                "scope": proposal["scope"],
+                "status": proposal["status"],
+            },
+        )
+
+
 async def _invoke_agent(agent: Any, payload: dict[str, Any]) -> Any:
     if hasattr(agent, "ainvoke"):
         return await agent.ainvoke(payload)
@@ -338,10 +408,10 @@ async def _chat_sse(request: ChatRequest, *, user_id: str) -> AsyncIterator[dict
         user_id=user_id,
     )
     traces_store.append_event(trace, kind="user_message", payload={"content": request.message})
-    agent = build_agent(
-        api_key=request.api_key,
-        base_url=request.base_url,
-        model_name=request.model,
+    agent, created_memory_proposals = _build_chat_agent(
+        request,
+        user_id=user_id,
+        trace=trace,
     )
     payload = {"messages": sessions_store.load_session(request.session_id, user_id=user_id)}
     final_text = ""
@@ -417,6 +487,7 @@ async def _chat_sse(request: ChatRequest, *, user_id: str) -> AsyncIterator[dict
         {"role": "assistant", "content": final_text},
         user_id=user_id,
     )
+    _record_created_memory_proposals(trace, created_memory_proposals)
     traces_store.save_trace(trace)
 
 
@@ -442,10 +513,10 @@ async def chat(request: ChatRequest, x_user_id: str | None = Header(default=None
         user_id=user_id,
     )
     traces_store.append_event(trace, kind="user_message", payload={"content": request.message})
-    agent = build_agent(
-        api_key=request.api_key,
-        base_url=request.base_url,
-        model_name=request.model,
+    agent, created_memory_proposals = _build_chat_agent(
+        request,
+        user_id=user_id,
+        trace=trace,
     )
     while True:
         try:
@@ -486,6 +557,7 @@ async def chat(request: ChatRequest, x_user_id: str | None = Header(default=None
                 },
             )
             traces_store.finalize_trace(trace, final_status="error")
+            _record_created_memory_proposals(trace, created_memory_proposals)
             traces_store.save_trace(trace)
             return JSONResponse(
                 status_code=502,
@@ -496,8 +568,74 @@ async def chat(request: ChatRequest, x_user_id: str | None = Header(default=None
         {"role": "assistant", "content": final_text},
         user_id=user_id,
     )
+    _record_created_memory_proposals(trace, created_memory_proposals)
     traces_store.save_trace(trace)
     return {"reply": final_text, "trace_id": trace["trace_id"]}
+
+
+@app.get("/api/memory/proposals")
+def list_memory_proposals(
+    status: str | None = None,
+    x_user_id: str | None = Header(default=None),
+) -> dict[str, list[dict[str, Any]]]:
+    user_id = normalize_user_id(x_user_id)
+    try:
+        proposals = proposals_store.list_proposals(user_id=user_id, status=status)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"proposals": proposals}
+
+
+def _decide_memory_proposal(
+    proposal_id: str,
+    *,
+    decision: str,
+    request: MemoryProposalDecisionRequest,
+    user_id: str,
+) -> dict[str, dict[str, Any]]:
+    try:
+        proposal = proposals_store.decide_proposal(
+            user_id=user_id,
+            proposal_id=proposal_id,
+            decision=decision,
+            decided_by=user_id,
+            reason=request.reason,
+        )
+    except proposals_store.ProposalNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="memory proposal not found") from exc
+    except proposals_store.ProposalStateError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"proposal": proposal}
+
+
+@app.post("/api/memory/proposals/{proposal_id}/approve")
+def approve_memory_proposal(
+    proposal_id: str,
+    request: MemoryProposalDecisionRequest,
+    x_user_id: str | None = Header(default=None),
+) -> dict[str, dict[str, Any]]:
+    user_id = normalize_user_id(x_user_id)
+    return _decide_memory_proposal(
+        proposal_id,
+        decision="approved",
+        request=request,
+        user_id=user_id,
+    )
+
+
+@app.post("/api/memory/proposals/{proposal_id}/reject")
+def reject_memory_proposal(
+    proposal_id: str,
+    request: MemoryProposalDecisionRequest,
+    x_user_id: str | None = Header(default=None),
+) -> dict[str, dict[str, Any]]:
+    user_id = normalize_user_id(x_user_id)
+    return _decide_memory_proposal(
+        proposal_id,
+        decision="rejected",
+        request=request,
+        user_id=user_id,
+    )
 
 
 @app.get("/api/files")

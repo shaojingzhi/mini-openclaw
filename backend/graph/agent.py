@@ -22,6 +22,7 @@ Environment variables (all optional with sensible defaults):
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from langchain.agents import create_agent
@@ -31,6 +32,7 @@ from langchain_openai import ChatOpenAI
 from backend.prompt_assembler import build_system_prompt
 from backend.settings import get_settings
 from backend.tools import (
+    build_propose_memory_update_tool,
     fetch_url,
     python_repl,
     read_file,
@@ -66,6 +68,10 @@ def build_agent(
     api_key: str | None = None,
     base_url: str | None = None,
     model_name: str | None = None,
+    user_id: str = "anonymous",
+    session_id: str | None = None,
+    approved_memories: list[dict[str, Any]] | None = None,
+    on_memory_proposal_created: Callable[[dict[str, Any]], None] | None = None,
 ) -> Any:
     """Build the Mini-OpenClaw Agent.
 
@@ -86,9 +92,17 @@ def build_agent(
         base_url=base_url,
         model=model_name,
     )
-    system_prompt = build_system_prompt()
+    system_prompt = build_system_prompt(approved_memories=approved_memories)
+    tools = [
+        *CORE_TOOLS,
+        build_propose_memory_update_tool(
+            user_id=user_id,
+            session_id=session_id,
+            on_proposal_created=on_memory_proposal_created,
+        ),
+    ]
     return create_agent(
         model=chat_model,
-        tools=CORE_TOOLS,
+        tools=tools,
         system_prompt=system_prompt,
     )

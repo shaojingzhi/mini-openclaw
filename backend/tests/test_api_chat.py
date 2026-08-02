@@ -16,6 +16,7 @@ app_mod = importlib.import_module("backend.app")
 ss_mod = importlib.import_module("backend.sessions_store")
 tr_mod = importlib.import_module("backend.traces_store")
 us_mod = importlib.import_module("backend.user_state")
+ps_mod = importlib.import_module("backend.memory.proposals_store")
 
 
 class _StreamingAgent:
@@ -122,7 +123,9 @@ class ApiChatTests(unittest.TestCase):
         self.assertEqual(trace["final_status"], "success")
         self.assertEqual(trace["model_name"], os.getenv("OPENAI_MODEL", "gpt-4o-mini"))
         self.assertEqual(len(trace["tool_calls"]), 1)
-        self.assertEqual(len(trace["events"]), 5)
+        self.assertEqual(len(trace["events"]), 6)
+        self.assertEqual(trace["events"][1]["kind"], "memory_loaded")
+        self.assertEqual(trace["events"][1]["payload"]["memory_count"], 0)
 
     def test_streaming_graph_search_records_trace_metadata(self) -> None:
         agent = _GraphStreamingAgent()
@@ -197,6 +200,67 @@ class ApiChatTests(unittest.TestCase):
         )
         self.assertEqual(trace["final_status"], "success")
         self.assertEqual(trace["events"][-1]["kind"], "final")
+
+    def test_chat_loads_approved_memory_and_records_created_proposal(self) -> None:
+        agent = _InvokeAgent()
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            traces_dir = tmp_path / "traces"
+            data_users_dir = tmp_path / "users"
+            with patch.object(ss_mod, "SESSIONS_DIR", tmp_path / "sessions"), patch.object(
+                us_mod, "DATA_USERS_DIR", data_users_dir
+            ), patch.object(tr_mod, "TRACES_DIR", traces_dir), patch.object(
+                ps_mod, "MEMORY_DIR", tmp_path / "memory"
+            ):
+                approved, _ = ps_mod.create_proposal(
+                    user_id="alice",
+                    session_id="main",
+                    target="user_capsule",
+                    memory_type="user_preference",
+                    content="Use Chinese for interview answers.",
+                    rationale="The user explicitly asked for it.",
+                )
+                ps_mod.decide_proposal(
+                    user_id="alice", proposal_id=approved["proposal_id"], decision="approved"
+                )
+                created, _ = ps_mod.create_proposal(
+                    user_id="alice",
+                    session_id="main",
+                    target="project_memory",
+                    memory_type="task_state",
+                    content="Review the pending deployment checklist next.",
+                    rationale="The user explicitly asked to retain the task state.",
+                )
+                build_args: dict[str, object] = {}
+
+                def build_with_proposal(**kwargs):
+                    build_args.update(kwargs)
+                    kwargs["on_memory_proposal_created"](created)
+                    return agent
+
+                with patch.object(app_mod, "build_agent", side_effect=build_with_proposal):
+                    client = TestClient(app_mod.app)
+                    response = client.post(
+                        "/api/chat",
+                        headers={"X-User-ID": "alice"},
+                        json={"message": "hello", "session_id": "main", "stream": False},
+                    )
+                trace = json.loads(next(traces_dir.glob("*.json")).read_text(encoding="utf-8"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            [memory["proposal_id"] for memory in build_args["approved_memories"]],
+            [approved["proposal_id"]],
+        )
+        events_by_kind = {event["kind"]: event["payload"] for event in trace["events"]}
+        self.assertEqual(events_by_kind["memory_loaded"]["memory_count"], 1)
+        self.assertEqual(events_by_kind["memory_loaded"]["approved_total"], 1)
+        self.assertEqual(events_by_kind["memory_loaded"]["omitted_proposal_ids"], [])
+        self.assertEqual(events_by_kind["memory_loaded"]["layer_counts"], {"user_capsule": 1})
+        self.assertEqual(events_by_kind["memory_loaded"]["proposal_ids"], [approved["proposal_id"]])
+        self.assertEqual(
+            events_by_kind["memory_proposal_created"]["proposal_id"], created["proposal_id"]
+        )
 
     def test_non_streaming_chat_failure_returns_categorized_payload(self) -> None:
         class _FailingAgent:

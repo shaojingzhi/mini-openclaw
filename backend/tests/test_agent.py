@@ -61,6 +61,12 @@ class BuildAgentTests(unittest.TestCase):
         agent = build_agent(model=self._fake_model("ok"))
         self.assertIsNotNone(agent)
 
+    def test_agent_includes_scoped_memory_proposal_tool(self) -> None:
+        agent = build_agent(model=self._fake_model("ok"), user_id="alice", session_id="main")
+
+        tools_by_name = agent.get_graph().nodes["tools"].data.tools_by_name
+        self.assertIn("propose_memory_update", tools_by_name)
+
 
 if __name__ == "__main__":
     unittest.main()

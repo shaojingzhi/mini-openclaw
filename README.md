@@ -107,6 +107,13 @@ npm run dev -- --hostname 127.0.0.1 --port 3004
 - `GET /api/sessions/{session_id}`：获取单个会话详情
 - `GET /api/traces`：列出 traces
 - `GET /api/traces/{trace_id}`：获取 trace 详情
+- `GET /api/memory/proposals`：列出当前用户的长期记忆提案
+- `POST /api/memory/proposals/{proposal_id}/approve`：批准提案，使其在下一次聊天启动时加载
+- `POST /api/memory/proposals/{proposal_id}/reject`：拒绝提案
+
+## 长期记忆审批
+
+Agent 只能通过 `propose_memory_update` 创建 pending 候选，不能直接写入活跃记忆。用户批准后，JSONL 审计记录会投影为 `approved_memory/AGENT.md`、`USER.md`、`PROJECT.md` 或 `RELATIONSHIP.md`，每条保留 proposal、来源会话、理由和审批信息。下一次聊天按层注入最近的批准记忆；trace 会记录 `memory_loaded`、`memory_proposal_created`、层级数量与裁剪数量，方便演示与审计。
 
 ## 验证命令
 
@@ -248,6 +255,13 @@ npm run dev -- --hostname 127.0.0.1 --port 3004
 - `GET /api/sessions/{session_id}`
 - `GET /api/traces`
 - `GET /api/traces/{trace_id}`
+- `GET /api/memory/proposals`
+- `POST /api/memory/proposals/{proposal_id}/approve`
+- `POST /api/memory/proposals/{proposal_id}/reject`
+
+## Long-Term Memory Review
+
+The agent can only create a pending candidate through `propose_memory_update`; it cannot directly write active memory. Approval projects the JSONL audit record into `approved_memory/AGENT.md`, `USER.md`, `PROJECT.md`, or `RELATIONSHIP.md`, retaining proposal, source, rationale, and approval provenance. The next bootstrap injects recent approved memory by layer, while traces record `memory_loaded`, `memory_proposal_created`, layer counts, and omitted entries for audit and demos.
 
 ## Verification
 

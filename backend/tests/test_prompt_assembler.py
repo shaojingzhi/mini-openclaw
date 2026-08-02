@@ -129,6 +129,69 @@ class BuildSystemPromptTests(unittest.TestCase):
         ):
             self.assertIn(f"# === {display_name} ===", prompt)
 
+    def test_approved_memories_are_added_as_a_dynamic_section(self) -> None:
+        prompt = pa_mod.build_system_prompt(
+            approved_memories=[
+                {
+                    "target": "user_capsule",
+                    "memory_type": "user_preference",
+                    "scope": "global",
+                    "content": "Prefer concise Chinese explanations.",
+                }
+            ]
+        )
+
+        self.assertIn("# === APPROVED_MEMORY ===", prompt)
+        self.assertIn("## User Profile", prompt)
+        self.assertIn("[unknown / user_preference / global]", prompt)
+        self.assertIn("Prefer concise Chinese explanations.", prompt)
+
+    def test_approved_memory_section_is_omitted_without_entries(self) -> None:
+        prompt = pa_mod.build_system_prompt(approved_memories=[])
+
+        self.assertNotIn("# === APPROVED_MEMORY ===", prompt)
+
+    def test_approved_memory_section_is_bounded(self) -> None:
+        prompt = pa_mod.build_system_prompt(
+            approved_memories=[
+                {
+                    "content": "X" * (pa_mod.MAX_APPROVED_MEMORY_CHARS + 100),
+                }
+            ]
+        )
+
+        memory_section = prompt[prompt.index("# === APPROVED_MEMORY ===") :]
+        self.assertIn(pa_mod.TRUNCATION_MARKER, memory_section)
+        self.assertLessEqual(
+            len(memory_section),
+            len("# === APPROVED_MEMORY ===\n")
+            + pa_mod.MAX_APPROVED_MEMORY_CHARS
+            + len(pa_mod.TRUNCATION_MARKER)
+            + 1,
+        )
+
+    def test_approved_memories_are_grouped_by_persona_layers(self) -> None:
+        prompt = pa_mod.build_system_prompt(
+            approved_memories=[
+                {
+                    "proposal_id": "memprop_agent",
+                    "target": "agent_behavior",
+                    "memory_type": "behavior_preference",
+                    "content": "Inspect code before proposing changes.",
+                },
+                {
+                    "proposal_id": "memprop_relationship",
+                    "target": "relationship_memory",
+                    "memory_type": "behavior_preference",
+                    "content": "Lead with the conclusion in interview preparation.",
+                },
+            ]
+        )
+
+        self.assertIn("## Agent Persona", prompt)
+        self.assertIn("## Relationship Primer", prompt)
+        self.assertLess(prompt.index("## Agent Persona"), prompt.index("## Relationship Primer"))
+
 
 if __name__ == "__main__":
     unittest.main()
