@@ -2,12 +2,23 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowRight, Bot, Loader2, MessageSquareText, Sparkles } from "lucide-react";
+import { ArrowRight, Bot, Loader2, MessageSquareText, ShieldCheck, Sparkles } from "lucide-react";
 import { Toaster, toast } from "sonner";
 
+import { MemoryApprovalCard } from "@/components/chat/memory-approval-card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { getSession, listSessions, streamChat, type ChatEvent, type SessionSummary } from "@/lib/api";
+import {
+  approveMemoryProposal,
+  getSession,
+  listMemoryProposals,
+  listSessions,
+  rejectMemoryProposal,
+  streamChat,
+  type ChatEvent,
+  type MemoryProposal,
+  type SessionSummary,
+} from "@/lib/api";
 
 type TraceItem =
   | { kind: "thought"; content: string }
@@ -96,9 +107,13 @@ export function ChatHomePage() {
   const [isLoadingSession, setIsLoadingSession] = useState(true);
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamError, setStreamError] = useState<string | null>(null);
+  const [pendingProposals, setPendingProposals] = useState<MemoryProposal[]>([]);
+  const [isApprovalOpen, setIsApprovalOpen] = useState(false);
+  const [isReviewingProposal, setIsReviewingProposal] = useState(false);
   const composerRef = useRef<HTMLInputElement | null>(null);
 
   const sessionLabel = useMemo(() => activeSessionId || "new session", [activeSessionId]);
+  const activeProposal = pendingProposals[0] ?? null;
 
   useEffect(() => {
     let mounted = true;
@@ -124,6 +139,10 @@ export function ChatHomePage() {
     return () => {
       mounted = false;
     };
+  }, []);
+
+  useEffect(() => {
+    void refreshPendingProposals(true);
   }, []);
 
   useEffect(() => {
@@ -165,6 +184,47 @@ export function ChatHomePage() {
   function handlePromptSelect(prompt: string) {
     setDraft(prompt);
     composerRef.current?.focus();
+  }
+
+  async function refreshPendingProposals(openWhenAvailable = false) {
+    try {
+      const proposals = await listMemoryProposals("pending");
+      setPendingProposals(proposals);
+      if (openWhenAvailable && proposals.length > 0) {
+        setIsApprovalOpen(true);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to load memory proposals";
+      toast.error("Memory review is unavailable", { description: message });
+    }
+  }
+
+  async function handleProposalDecision(decision: "approve" | "reject") {
+    if (!activeProposal || isReviewingProposal) {
+      return;
+    }
+
+    setIsReviewingProposal(true);
+    try {
+      if (decision === "approve") {
+        await approveMemoryProposal(activeProposal.proposal_id);
+      } else {
+        await rejectMemoryProposal(activeProposal.proposal_id);
+      }
+
+      const remaining = await listMemoryProposals("pending");
+      setPendingProposals(remaining);
+      setIsApprovalOpen(remaining.length > 0);
+      toast.success(decision === "approve" ? "Memory approved" : "Memory rejected", {
+        description: decision === "approve" ? "It will be loaded in a future chat." : "It will not enter long-term memory.",
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to save memory decision";
+      toast.error("Memory review failed", { description: message });
+      void refreshPendingProposals(true);
+    } finally {
+      setIsReviewingProposal(false);
+    }
   }
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
@@ -222,6 +282,7 @@ export function ChatHomePage() {
       );
     } finally {
       setIsStreaming(false);
+      void refreshPendingProposals(true);
     }
   }
 
@@ -294,9 +355,17 @@ export function ChatHomePage() {
                   </div>
                   <p className="mt-1 text-xs text-slate-500">{sessionLabel}</p>
                 </div>
-                <Link className="text-sm font-medium text-emerald-700 hover:text-emerald-900" href="/workbench">
-                  Need internals? Open Workbench
-                </Link>
+                <div className="flex flex-wrap items-center gap-3">
+                  {pendingProposals.length > 0 ? (
+                    <button className="inline-flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-800 transition hover:border-amber-300 hover:bg-amber-100" onClick={() => setIsApprovalOpen(true)} type="button">
+                      <ShieldCheck className="h-3.5 w-3.5" />
+                      {pendingProposals.length} memory review{pendingProposals.length === 1 ? "" : "s"}
+                    </button>
+                  ) : null}
+                  <Link className="text-sm font-medium text-emerald-700 hover:text-emerald-900" href="/workbench">
+                    Need internals? Open Workbench
+                  </Link>
+                </div>
               </div>
 
               <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5">
@@ -370,6 +439,15 @@ export function ChatHomePage() {
           </section>
         </div>
       </main>
+      <MemoryApprovalCard
+        isOpen={isApprovalOpen}
+        isSubmitting={isReviewingProposal}
+        onApprove={() => void handleProposalDecision("approve")}
+        onClose={() => setIsApprovalOpen(false)}
+        onReject={() => void handleProposalDecision("reject")}
+        pendingCount={pendingProposals.length}
+        proposal={activeProposal}
+      />
     </>
   );
 }

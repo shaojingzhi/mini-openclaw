@@ -113,6 +113,22 @@ class MemoryProposalStoreTests(unittest.TestCase):
                 self.assertIn("# Relationship Primer", relationship.read_text(encoding="utf-8"))
                 self.assertIn(proposal["proposal_id"], relationship.read_text(encoding="utf-8"))
 
+    def test_projection_failure_leaves_proposal_pending(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch.object(ps_mod, "MEMORY_DIR", root / "memory"):
+                proposal, _ = self._create()
+                with patch.object(ps_mod, "_materialize_records", side_effect=OSError("disk full")):
+                    with self.assertRaises(OSError):
+                        ps_mod.decide_proposal(
+                            user_id="anonymous",
+                            proposal_id=proposal["proposal_id"],
+                            decision="approved",
+                        )
+
+                pending = ps_mod.list_proposals(user_id="anonymous", status="pending")
+                self.assertEqual([record["proposal_id"] for record in pending], [proposal["proposal_id"]])
+
     def test_cannot_decide_missing_or_already_decided_proposal(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

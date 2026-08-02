@@ -20,7 +20,12 @@ env/
 # Mini-OpenClaw runtime artifacts
 backend/storage/
 backend/data/graph/
+backend/data/traces/
+backend/data/users/
+backend/evals/reports/
 backend/memory/logs/*.log
+backend/memory/memory_proposals.jsonl
+backend/memory/approved_memory/
 backend/sessions/*.json
 !backend/sessions/.gitkeep
 references/

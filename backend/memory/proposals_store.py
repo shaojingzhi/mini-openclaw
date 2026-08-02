@@ -309,18 +309,23 @@ def materialize_approved_memories(*, user_id: str | None) -> dict[str, Path]:
     later. Regeneration prevents direct file edits from becoming active memory.
     """
     normalized_user_id = normalize_user_id(user_id)
-    records = list(reversed(list_proposals(user_id=normalized_user_id, status="approved")))
+    with _STORE_LOCK:
+        records = _read_records(proposals_path(normalized_user_id))
+        return _materialize_records(user_id=normalized_user_id, records=records)
+
+
+def _materialize_records(*, user_id: str, records: list[dict[str, Any]]) -> dict[str, Path]:
+    approved_records = [record for record in records if record.get("status") == "approved"]
     records_by_target = {target: [] for target in _LAYER_METADATA}
-    for record in records:
+    for record in approved_records:
         target = record.get("target")
         if target in records_by_target:
             records_by_target[target].append(record)
 
-    paths = materialized_memory_paths(normalized_user_id)
-    with _STORE_LOCK:
-        for target, path in paths.items():
-            _, title = _LAYER_METADATA[target]
-            _write_records_as_markdown(path, _format_materialized_layer(title, records_by_target[target]))
+    paths = materialized_memory_paths(user_id)
+    for target, path in paths.items():
+        _, title = _LAYER_METADATA[target]
+        _write_records_as_markdown(path, _format_materialized_layer(title, records_by_target[target]))
     return paths
 
 
@@ -358,11 +363,10 @@ def decide_proposal(
             record["decided_at"] = _utc_now()
             record["decided_by"] = normalize_user_id(decided_by or normalized_user_id)
             record["decision_reason"] = normalized_reason
-            _write_records(path, records)
-            approved_record = _copy_record(record)
             if decision == "approved":
-                materialize_approved_memories(user_id=normalized_user_id)
-            return approved_record
+                _materialize_records(user_id=normalized_user_id, records=records)
+            _write_records(path, records)
+            return _copy_record(record)
 
     raise ProposalNotFoundError(f"proposal {proposal_id} was not found")
 

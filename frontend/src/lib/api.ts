@@ -43,6 +43,26 @@ export type SessionMessage = {
   content: string;
 };
 
+export type MemoryProposalStatus = "pending" | "approved" | "rejected";
+
+export type MemoryProposal = {
+  proposal_id: string;
+  status: MemoryProposalStatus;
+  session_id: string | null;
+  target: "user_capsule" | "project_memory" | "agent_behavior" | "relationship_memory";
+  memory_type: "user_preference" | "project_convention" | "task_state" | "behavior_preference";
+  content: string;
+  rationale: string;
+  confidence: "low" | "medium" | "high";
+  signal_kind: "user_instructed" | "explicit_preference" | "repeated_feedback" | "project_decision";
+  scope: "global" | "project" | "task" | "interview_prep";
+  source_message_id: string | null;
+  created_at: string;
+  decided_at: string | null;
+  decided_by: string | null;
+  decision_reason: string | null;
+};
+
 export type TraceSummary = {
   trace_id: string;
   session_id: string;
@@ -335,6 +355,48 @@ export async function getSession(sessionId: string): Promise<SessionMessage[]> {
 
   const body = (await response.json()) as { session_id: string; messages: SessionMessage[] };
   return body.messages;
+}
+
+export async function listMemoryProposals(
+  status?: MemoryProposalStatus,
+): Promise<MemoryProposal[]> {
+  const url = new URL(buildApiUrl("/api/memory/proposals"));
+  if (status) {
+    url.searchParams.set("status", status);
+  }
+  const response = await assertResponseOk(
+    await fetch(url, { cache: "no-store" }),
+    "listMemoryProposals",
+  );
+
+  const body = (await response.json()) as { proposals: MemoryProposal[] };
+  return body.proposals;
+}
+
+async function decideMemoryProposal(
+  proposalId: string,
+  decision: "approve" | "reject",
+  reason?: string,
+): Promise<MemoryProposal> {
+  const response = await assertResponseOk(
+    await fetch(buildApiUrl(`/api/memory/proposals/${encodeURIComponent(proposalId)}/${decision}`), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason: reason?.trim() || undefined }),
+    }),
+    `${decision}MemoryProposal`,
+  );
+
+  const body = (await response.json()) as { proposal: MemoryProposal };
+  return body.proposal;
+}
+
+export function approveMemoryProposal(proposalId: string, reason?: string): Promise<MemoryProposal> {
+  return decideMemoryProposal(proposalId, "approve", reason);
+}
+
+export function rejectMemoryProposal(proposalId: string, reason?: string): Promise<MemoryProposal> {
+  return decideMemoryProposal(proposalId, "reject", reason);
 }
 
 export async function listTraces(): Promise<TraceSummary[]> {

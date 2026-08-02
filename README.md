@@ -113,7 +113,7 @@ npm run dev -- --hostname 127.0.0.1 --port 3004
 
 ## 长期记忆审批
 
-Agent 只能通过 `propose_memory_update` 创建 pending 候选，不能直接写入活跃记忆。用户批准后，JSONL 审计记录会投影为 `approved_memory/AGENT.md`、`USER.md`、`PROJECT.md` 或 `RELATIONSHIP.md`，每条保留 proposal、来源会话、理由和审批信息。下一次聊天按层注入最近的批准记忆；trace 会记录 `memory_loaded`、`memory_proposal_created`、层级数量与裁剪数量，方便演示与审计。
+Agent 只能通过 `propose_memory_update` 创建 pending 候选，不能直接写入活跃记忆。聊天首页会弹出 review card 供用户 approve/reject；用户批准后，JSONL 审计记录会投影为 `approved_memory/AGENT.md`、`USER.md`、`PROJECT.md` 或 `RELATIONSHIP.md`，每条保留 proposal、来源会话、理由和审批信息。下一次聊天按层注入最近的批准记忆；trace 会记录 `memory_loaded`、`memory_proposal_created`、层级数量与裁剪数量，方便演示与审计。
 
 ## 验证命令
 
@@ -261,7 +261,7 @@ npm run dev -- --hostname 127.0.0.1 --port 3004
 
 ## Long-Term Memory Review
 
-The agent can only create a pending candidate through `propose_memory_update`; it cannot directly write active memory. Approval projects the JSONL audit record into `approved_memory/AGENT.md`, `USER.md`, `PROJECT.md`, or `RELATIONSHIP.md`, retaining proposal, source, rationale, and approval provenance. The next bootstrap injects recent approved memory by layer, while traces record `memory_loaded`, `memory_proposal_created`, layer counts, and omitted entries for audit and demos.
+The agent can only create a pending candidate through `propose_memory_update`; it cannot directly write active memory. The chat home opens a review card for pending proposals. Approval projects the JSONL audit record into `approved_memory/AGENT.md`, `USER.md`, `PROJECT.md`, or `RELATIONSHIP.md`, retaining proposal, source, rationale, and approval provenance. The next bootstrap injects recent approved memory by layer, while traces record `memory_loaded`, `memory_proposal_created`, layer counts, and omitted entries for audit and demos.
 
 ## Verification
 
