@@ -25,6 +25,7 @@ class ProposeMemoryUpdateToolTests(unittest.TestCase):
                 tool = tool_mod.build_propose_memory_update_tool(
                     user_id="alice",
                     session_id="session-1",
+                    agent_id="spark",
                     on_proposal_created=created.append,
                 )
                 tool_input = {
@@ -44,7 +45,31 @@ class ProposeMemoryUpdateToolTests(unittest.TestCase):
                 self.assertEqual(first["status"], "pending")
                 self.assertEqual(len(created), 1)
                 self.assertEqual(created[0]["session_id"], "session-1")
+                self.assertIsNone(created[0]["agent_id"])
+                self.assertEqual(created[0]["visibility"], "shared")
                 self.assertEqual(ps_mod.list_approved_memories(user_id="alice"), [])
+
+    def test_private_memory_owner_is_captured_by_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch.object(ps_mod, "MEMORY_DIR", root / "memory"):
+                tool = tool_mod.build_propose_memory_update_tool(
+                    user_id="alice",
+                    session_id="session-1",
+                    agent_id="spark",
+                )
+                tool.invoke(
+                    {
+                        "target": "relationship_memory",
+                        "memory_type": "behavior_preference",
+                        "content": "Explore alternatives before recommending one.",
+                        "rationale": "The user explicitly requested this collaboration style.",
+                    }
+                )
+                proposal = ps_mod.list_proposals(user_id="alice")[0]
+
+        self.assertEqual(proposal["agent_id"], "spark")
+        self.assertEqual(proposal["visibility"], "agent_private")
 
 
 if __name__ == "__main__":

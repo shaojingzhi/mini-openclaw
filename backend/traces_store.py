@@ -29,11 +29,17 @@ def create_trace(
     session_id: str,
     model_name: str,
     user_id: str | None = None,
+    selected_agent_id: str | None = None,
+    route_reason: str | None = None,
 ) -> dict[str, Any]:
     return {
         "trace_id": new_trace_id(),
         "session_id": session_id,
         "user_id": user_id,
+        "selected_agent_id": selected_agent_id,
+        "active_agent_id": selected_agent_id,
+        "route_reason": route_reason,
+        "handoff_count": 0,
         "start_time": utc_now_iso(),
         "end_time": None,
         "latency_ms": None,

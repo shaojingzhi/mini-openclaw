@@ -8,6 +8,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from backend.agents.profiles import get_agent_profile
+
 # Use importlib so patch.object can find module-level attributes — the
 # package re-export shadow trick noted in progress.txt §Codebase Patterns
 # does not bite here (prompt_assembler is not re-exported from a package
@@ -16,6 +18,13 @@ pa_mod = importlib.import_module("backend.prompt_assembler")
 
 
 class BuildSystemPromptTests(unittest.TestCase):
+    def test_selected_agent_profile_is_added_to_prompt(self) -> None:
+        prompt = pa_mod.build_system_prompt(agent_profile=get_agent_profile("spark"))
+
+        self.assertIn("# === ACTIVE_AGENT ===", prompt)
+        self.assertIn("Agent ID: spark", prompt)
+        self.assertIn("Display name: 火花 (Spark)", prompt)
+
     def _seed_all(self, workspace: Path, memory: Path, *, oversized: str | None = None) -> None:
         """Write the six expected files with small, distinctive content."""
         workspace.mkdir(parents=True, exist_ok=True)

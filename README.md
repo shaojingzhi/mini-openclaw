@@ -7,6 +7,7 @@ Mini-OpenClaw 是一个面向 Agent 场景的轻量级本地工作台：后端�
 ## 功能概览
 
 - 对话流式输出：前端通过 SSE/流式 `fetch` 消费 `/api/chat`
+- 三 Agent 社区：灯塔默认接待，支持 `@火花`、`@砥石`确定性路由和一次显式 handoff
 - 可编辑工作区：直接在前端查看和编辑 memory、skills、workspace 文档
 - 会话管理：查看 session 列表、切换历史会话、读取消息状态
 - Trace 可视化：查看运行痕迹与错误信息，便于排查问题
@@ -100,6 +101,7 @@ npm run dev -- --hostname 127.0.0.1 --port 3004
 ## 主要接口
 
 - `GET /health`：健康检查
+- `GET /api/agents`：列出 Agent 人格、别名与社区职责
 - `POST /api/chat`：流式聊天
 - `GET /api/files`：读取前端 Inspector 中文件
 - `POST /api/files`：保存文件修改
@@ -108,12 +110,22 @@ npm run dev -- --hostname 127.0.0.1 --port 3004
 - `GET /api/traces`：列出 traces
 - `GET /api/traces/{trace_id}`：获取 trace 详情
 - `GET /api/memory/proposals`：列出当前用户的长期记忆提案
+- `POST /api/memory/projections/rebuild`：从 JSONL source of truth 原子重建记忆 projection
 - `POST /api/memory/proposals/{proposal_id}/approve`：批准提案，使其在下一次聊天启动时加载
 - `POST /api/memory/proposals/{proposal_id}/reject`：拒绝提案
 
+## 三 Agent 使用方式
+
+- 不写 mention 时由灯塔回答，负责上下文连续性和默认接待。
+- 输入 `@火花` 定向获得证据检索、替代方案和机会视角。
+- 输入 `@砥石` 定向获得假设、风险、矛盾和缺失验证检查。
+- 灯塔可通过受控 tool 显式转交一次；目标 Agent 不能继续递归转交。聊天气泡和 trace 都会显示路由与 handoff 来源。
+
 ## 长期记忆审批
 
-Agent 只能通过 `propose_memory_update` 创建 pending 候选，不能直接写入活跃记忆。聊天首页会弹出 review card 供用户 approve/reject；用户批准后，JSONL 审计记录会投影为 `approved_memory/AGENT.md`、`USER.md`、`PROJECT.md` 或 `RELATIONSHIP.md`，每条保留 proposal、来源会话、理由和审批信息。下一次聊天按层注入最近的批准记忆；trace 会记录 `memory_loaded`、`memory_proposal_created`、层级数量与裁剪数量，方便演示与审计。
+Agent 只能通过 `propose_memory_update` 创建 pending 候选，不能直接写入活跃记忆。聊天首页会弹出 review card 供用户 approve/reject；用户批准后，共享的 USER/PROJECT 层投影到 `approved_memory/`，私有的 AGENT/RELATIONSHIP 层投影到 `approved_memory/agents/{agent_id}/`。下一次聊天只注入共享记忆和当前 Agent 的私有记忆；trace 会记录 `memory_loaded`、`memory_proposal_created`、层级数量与裁剪数量，方便演示与审计。
+
+运行时边界：`fetch_url` 只允许访问解析到公网的 HTTP(S) 地址，并会校验重定向目标；服务启动时会以 JSONL 审计记录为事实源清理遗留 transaction 文件并重建 memory projection。handoff 只会传递标为 shared 的网页或知识库证据。
 
 ## 验证命令
 
@@ -157,6 +169,7 @@ Mini-OpenClaw is a lightweight local workbench for agent-style applications. It 
 ## Highlights
 
 - Streaming chat output via `/api/chat`
+- Three-agent community with Lighthouse as host, deterministic mentions, and one bounded handoff
 - Editable workspace files from the frontend inspector
 - Session browsing and conversation state inspection
 - Trace views for debugging runtime behavior and failures
@@ -248,6 +261,7 @@ npm run dev -- --hostname 127.0.0.1 --port 3004
 ## Main API Endpoints
 
 - `GET /health`
+- `GET /api/agents`
 - `POST /api/chat`
 - `GET /api/files`
 - `POST /api/files`
@@ -256,12 +270,22 @@ npm run dev -- --hostname 127.0.0.1 --port 3004
 - `GET /api/traces`
 - `GET /api/traces/{trace_id}`
 - `GET /api/memory/proposals`
+- `POST /api/memory/projections/rebuild`
 - `POST /api/memory/proposals/{proposal_id}/approve`
 - `POST /api/memory/proposals/{proposal_id}/reject`
 
+## Three-Agent Usage
+
+- Use chat normally for Lighthouse, the default continuity-focused host.
+- Prefix a request with `@Spark` or `@火花` for evidence and alternatives.
+- Prefix a request with `@Whetstone` or `@砥石` for assumption and risk checks.
+- Lighthouse may request one explicit handoff. The target cannot delegate recursively, and both chat messages and traces retain provenance.
+
 ## Long-Term Memory Review
 
-The agent can only create a pending candidate through `propose_memory_update`; it cannot directly write active memory. The chat home opens a review card for pending proposals. Approval projects the JSONL audit record into `approved_memory/AGENT.md`, `USER.md`, `PROJECT.md`, or `RELATIONSHIP.md`, retaining proposal, source, rationale, and approval provenance. The next bootstrap injects recent approved memory by layer, while traces record `memory_loaded`, `memory_proposal_created`, layer counts, and omitted entries for audit and demos.
+The agent can only create a pending candidate through `propose_memory_update`; it cannot directly write active memory. Shared USER/PROJECT layers are projected under `approved_memory/`, while private AGENT/RELATIONSHIP layers are projected under `approved_memory/agents/{agent_id}/`. The next bootstrap injects shared memory plus only the active agent's private memory, while traces retain loading and proposal provenance.
+
+Runtime boundaries: `fetch_url` only reaches HTTP(S) addresses that resolve publicly and validates every redirect target. On startup, JSONL remains the source of truth: stale transaction artifacts are removed and memory projections are rebuilt. Handoffs forward only shared web or knowledge-base evidence.
 
 ## Verification
 

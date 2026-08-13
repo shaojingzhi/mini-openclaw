@@ -1028,7 +1028,7 @@ export function WorkbenchPage() {
                                   <span className="text-[11px] uppercase tracking-[0.18em] text-slate-400">{trace.final_status}</span>
                                 </div>
                                 <p className={["mt-1 text-xs", active ? "text-white/65" : "text-slate-500"].join(" ")}>{trace.session_id}</p>
-                                <p className={["mt-1 text-xs", active ? "text-white/50" : "text-slate-400"].join(" ")}>{trace.latency_ms ?? 0} ms</p>
+                                <p className={["mt-1 text-xs", active ? "text-white/50" : "text-slate-400"].join(" ")}>{trace.latency_ms ?? 0} ms · {trace.active_agent_id ?? "legacy agent"}{trace.handoff_count > 0 ? ` · ${trace.handoff_count} handoff` : ""}</p>
                               </button>
                             );
                           })
@@ -1065,6 +1065,8 @@ export function WorkbenchPage() {
                           <div className="space-y-3">
                             <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
                               <p>Model: {activeTrace.model_name}</p>
+                              <p className="mt-1">Agent: {activeTrace.active_agent_id ?? "legacy agent"} · Route: {activeTrace.route_reason ?? "legacy"}</p>
+                              {activeTrace.handoff_count > 0 ? <p className="mt-1">Handoffs: {activeTrace.handoff_count}</p> : null}
                               <p className="mt-1">Latency: {activeTrace.latency_ms ?? 0} ms</p>
                               <p className="mt-1">Started: {formatTimestamp(activeTrace.start_time)}</p>
                               {activeTrace.error_category ? <p className="mt-1">Error category: {activeTrace.error_category}</p> : null}

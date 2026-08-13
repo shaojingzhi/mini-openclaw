@@ -61,12 +61,51 @@ class _GraphStreamingAgent:
 
 
 class _InvokeAgent:
-    def __init__(self) -> None:
+    def __init__(self, reply: str = "plain reply") -> None:
         self.payloads: list[dict[str, object]] = []
+        self.reply = reply
 
     async def ainvoke(self, payload):
         self.payloads.append(payload)
-        return {"messages": [{"role": "assistant", "content": "plain reply"}]}
+        return {"messages": [{"role": "assistant", "content": self.reply}]}
+
+
+class _EvidenceInvokeAgent(_InvokeAgent):
+    def __init__(self, reply: str, evidence: str) -> None:
+        super().__init__(reply)
+        self.evidence = evidence
+
+    async def ainvoke(self, payload):
+        self.payloads.append(payload)
+        return {
+            "messages": [
+                {
+                    "role": "tool",
+                    "name": "search_knowledge_base",
+                    "content": self.evidence,
+                },
+                {"role": "assistant", "content": self.reply},
+            ]
+        }
+
+
+class _FinalStreamingAgent:
+    def __init__(self, reply: str, evidence: str | None = None) -> None:
+        self.reply = reply
+        self.evidence = evidence
+        self.payloads: list[dict[str, object]] = []
+
+    async def astream_events(self, payload, version="v2"):
+        self.payloads.append(payload)
+        if self.evidence is not None:
+            yield {
+                "type": "tool_result",
+                "data": {
+                    "name": "search_knowledge_base",
+                    "content": self.evidence,
+                },
+            }
+        yield {"type": "final", "data": {"content": self.reply}}
 
 
 class _FlakyRecoverableAgent:
@@ -103,29 +142,30 @@ class ApiChatTests(unittest.TestCase):
         self.assertEqual(response.headers["content-type"], "text/event-stream; charset=utf-8")
         body = response.text
         self.assertIn("event: thought", body)
-        self.assertIn('data: {"content": "thinking"}', body)
+        self.assertIn('data: {"content": "thinking", "agent_id": "lighthouse"}', body)
         self.assertIn("event: tool_call", body)
         self.assertIn("event: tool_result", body)
         self.assertIn("event: final", body)
-        self.assertIn('data: {"content": "hello back"}', body)
+        self.assertIn('data: {"content": "hello back", "agent_id": "lighthouse"}', body)
+        self.assertGreaterEqual(body.count('"agent_id": "lighthouse"'), 5)
         self.assertEqual(
             agent.payloads,
             [{"messages": [{"role": "user", "content": "say hello"}]}],
         )
-        self.assertEqual(
-            persisted,
-            [
-                {"role": "user", "content": "say hello"},
-                {"role": "assistant", "content": "hello back"},
-            ],
-        )
+        self.assertEqual(persisted[0], {"role": "user", "content": "say hello"})
+        self.assertEqual(persisted[1]["role"], "assistant")
+        self.assertEqual(persisted[1]["content"], "hello back")
+        self.assertEqual(persisted[1]["author_agent_id"], "lighthouse")
+        self.assertEqual(persisted[1]["visibility"], "user")
         self.assertEqual(trace["session_id"], "main")
+        self.assertEqual(trace["selected_agent_id"], "lighthouse")
         self.assertEqual(trace["final_status"], "success")
         self.assertEqual(trace["model_name"], os.getenv("OPENAI_MODEL", "gpt-4o-mini"))
         self.assertEqual(len(trace["tool_calls"]), 1)
-        self.assertEqual(len(trace["events"]), 6)
-        self.assertEqual(trace["events"][1]["kind"], "memory_loaded")
-        self.assertEqual(trace["events"][1]["payload"]["memory_count"], 0)
+        self.assertEqual(len(trace["events"]), 7)
+        self.assertEqual(trace["events"][1]["kind"], "agent_routed")
+        self.assertEqual(trace["events"][2]["kind"], "memory_loaded")
+        self.assertEqual(trace["events"][2]["payload"]["memory_count"], 0)
 
     def test_streaming_graph_search_records_trace_metadata(self) -> None:
         agent = _GraphStreamingAgent()
@@ -191,15 +231,221 @@ class ApiChatTests(unittest.TestCase):
             agent.payloads,
             [{"messages": [{"role": "user", "content": "say hello"}]}],
         )
-        self.assertEqual(
-            persisted,
-            [
-                {"role": "user", "content": "say hello"},
-                {"role": "assistant", "content": "plain reply"},
-            ],
-        )
+        self.assertEqual(persisted[0], {"role": "user", "content": "say hello"})
+        self.assertEqual(persisted[1]["content"], "plain reply")
+        self.assertEqual(persisted[1]["author_agent_id"], "lighthouse")
+        self.assertEqual(body["agent"]["agent_id"], "lighthouse")
         self.assertEqual(trace["final_status"], "success")
         self.assertEqual(trace["events"][-1]["kind"], "final")
+
+    def test_explicit_mention_routes_to_spark_and_filters_private_memory(self) -> None:
+        agent = _InvokeAgent("spark reply")
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            traces_dir = tmp_path / "traces"
+            data_users_dir = tmp_path / "users"
+            memory_dir = tmp_path / "memory"
+            with patch.object(ss_mod, "SESSIONS_DIR", tmp_path / "sessions"), patch.object(
+                us_mod, "DATA_USERS_DIR", data_users_dir
+            ), patch.object(tr_mod, "TRACES_DIR", traces_dir), patch.object(
+                ps_mod, "MEMORY_DIR", memory_dir
+            ):
+                proposals = []
+                for target, owner, content in (
+                    ("project_memory", "lighthouse", "Shared project fact."),
+                    ("relationship_memory", "spark", "Spark private preference."),
+                    ("relationship_memory", "whetstone", "Whetstone private preference."),
+                ):
+                    proposal, _ = ps_mod.create_proposal(
+                        user_id="alice",
+                        session_id="main",
+                        agent_id=owner,
+                        target=target,
+                        memory_type="behavior_preference",
+                        content=content,
+                        rationale="Test memory boundary.",
+                    )
+                    ps_mod.decide_proposal(
+                        user_id="alice", proposal_id=proposal["proposal_id"], decision="approved"
+                    )
+                    proposals.append(proposal)
+                build_args: dict[str, object] = {}
+
+                def capture_build(**kwargs):
+                    build_args.update(kwargs)
+                    return agent
+
+                with patch.object(app_mod, "build_agent", side_effect=capture_build):
+                    client = TestClient(app_mod.app)
+                    response = client.post(
+                        "/api/chat",
+                        headers={"X-User-ID": "alice"},
+                        json={"message": "@火花 给我两个方案", "session_id": "main", "stream": False},
+                    )
+                trace = json.loads(next(traces_dir.glob("*.json")).read_text(encoding="utf-8"))
+
+        loaded_ids = {memory["proposal_id"] for memory in build_args["approved_memories"]}
+        self.assertEqual(build_args["agent_profile"].agent_id, "spark")
+        self.assertEqual(loaded_ids, {proposals[0]["proposal_id"], proposals[1]["proposal_id"]})
+        self.assertEqual(response.json()["agent"]["agent_id"], "spark")
+        self.assertEqual(trace["events"][1]["payload"]["route_reason"], "explicit_mention")
+
+    def test_non_streaming_handoff_invokes_target_once_and_persists_provenance(self) -> None:
+        built_agents: list[str] = []
+        source_agent = _EvidenceInvokeAgent(
+            "host draft",
+            "verified evidence " + ("x" * 1_200),
+        )
+        target_agent = _InvokeAgent("calibrated answer")
+
+        def build_with_handoff(**kwargs):
+            agent_id = kwargs["agent_profile"].agent_id
+            built_agents.append(agent_id)
+            if agent_id == "lighthouse":
+                kwargs["on_handoff_requested"](
+                    {
+                        "from_agent_id": "lighthouse",
+                        "to_agent_id": "whetstone",
+                        "task": "Validate the interview claim.",
+                        "reason": "This claim needs a stricter risk check.",
+                    }
+                )
+                return source_agent
+            return target_agent
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            traces_dir = tmp_path / "traces"
+            data_users_dir = tmp_path / "users"
+            with patch.object(ss_mod, "SESSIONS_DIR", tmp_path), patch.object(
+                us_mod, "DATA_USERS_DIR", data_users_dir
+            ), patch.object(tr_mod, "TRACES_DIR", traces_dir), patch.object(
+                app_mod, "build_agent", side_effect=build_with_handoff
+            ):
+                client = TestClient(app_mod.app)
+                response = client.post(
+                    "/api/chat",
+                    json={"message": "Review this claim", "session_id": "main", "stream": False},
+                )
+                persisted = ss_mod.load_session("main", user_id="anonymous")
+                trace = json.loads(next(traces_dir.glob("*.json")).read_text(encoding="utf-8"))
+
+        self.assertEqual(built_agents, ["lighthouse", "whetstone"])
+        self.assertEqual(response.json()["reply"], "calibrated answer")
+        self.assertEqual(response.json()["agent"]["agent_id"], "whetstone")
+        self.assertEqual(persisted[-1]["author_agent_id"], "whetstone")
+        self.assertEqual(persisted[-1]["handoff_from_agent_id"], "lighthouse")
+        target_messages = target_agent.payloads[0]["messages"]
+        self.assertEqual(target_messages[0]["role"], "system")
+        self.assertEqual(target_messages[-1], {"role": "user", "content": "Review this claim"})
+        self.assertEqual(
+            [message["role"] for message in target_messages].count("user"),
+            1,
+        )
+        self.assertIn("not a user message", target_messages[0]["content"])
+        envelope = json.loads(target_messages[0]["content"].splitlines()[-1])
+        self.assertEqual(envelope["evidence"][0]["tool_name"], "search_knowledge_base")
+        self.assertEqual(len(envelope["evidence"][0]["content"]), 1_000)
+        handoff_id = response.json()["handoff"]["handoff_id"]
+        requested_event = next(
+            event for event in trace["events"] if event["kind"] == "handoff_requested"
+        )
+        self.assertEqual(envelope["handoff_id"], handoff_id)
+        self.assertEqual(persisted[-1]["handoff_id"], handoff_id)
+        self.assertEqual(trace["last_handoff_id"], handoff_id)
+        self.assertEqual(requested_event["payload"]["handoff_id"], handoff_id)
+        self.assertEqual(requested_event["payload"]["evidence_count"], 1)
+        self.assertEqual(trace["handoff_count"], 1)
+        self.assertIn("handoff_requested", [event["kind"] for event in trace["events"]])
+        self.assertIn("handoff_completed", [event["kind"] for event in trace["events"]])
+
+    def test_streaming_handoff_hides_host_draft(self) -> None:
+        source_agent = _FinalStreamingAgent("host draft", "verified streaming evidence")
+        target_agent = _FinalStreamingAgent("scout answer")
+
+        def build_with_handoff(**kwargs):
+            if kwargs["agent_profile"].agent_id == "lighthouse":
+                kwargs["on_handoff_requested"](
+                    {
+                        "from_agent_id": "lighthouse",
+                        "to_agent_id": "spark",
+                        "task": "Explore alternatives.",
+                        "reason": "The user would benefit from a broader option set.",
+                    }
+                )
+                return source_agent
+            return target_agent
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            traces_dir = tmp_path / "traces"
+            with patch.object(ss_mod, "SESSIONS_DIR", tmp_path), patch.object(
+                us_mod, "DATA_USERS_DIR", tmp_path / "users"
+            ), patch.object(tr_mod, "TRACES_DIR", traces_dir), patch.object(
+                app_mod, "build_agent", side_effect=build_with_handoff
+            ):
+                client = TestClient(app_mod.app)
+                response = client.post(
+                    "/api/chat",
+                    json={"message": "Find options", "session_id": "main", "stream": True},
+                )
+                persisted = ss_mod.load_session("main", user_id="anonymous")
+                trace = json.loads(next(traces_dir.glob("*.json")).read_text(encoding="utf-8"))
+
+        self.assertIn("event: handoff", response.text)
+        self.assertIn('"evidence_count": 1', response.text)
+        self.assertNotIn("host draft", response.text)
+        self.assertIn("scout answer", response.text)
+        self.assertEqual(persisted[-1]["content"], "scout answer")
+        self.assertEqual(persisted[-1]["author_agent_id"], "spark")
+        target_messages = target_agent.payloads[0]["messages"]
+        self.assertEqual(target_messages[0]["role"], "system")
+        self.assertEqual(target_messages[-1], {"role": "user", "content": "Find options"})
+        envelope = json.loads(target_messages[0]["content"].splitlines()[-1])
+        self.assertEqual(
+            envelope["evidence"],
+            [
+                {
+                    "tool_name": "search_knowledge_base",
+                    "content": "verified streaming evidence",
+                    "visibility": "shared",
+                }
+            ],
+        )
+        handoff_id = persisted[-1]["handoff_id"]
+        self.assertEqual(envelope["handoff_id"], handoff_id)
+        self.assertEqual(trace["last_handoff_id"], handoff_id)
+
+    def test_handoff_excludes_private_tool_evidence(self) -> None:
+        handoff = app_mod._prepare_handoff(
+            {
+                "from_agent_id": "lighthouse",
+                "to_agent_id": "spark",
+                "task": "Compare the public evidence.",
+                "reason": "A second perspective is useful.",
+            },
+            [
+                app_mod._tool_evidence(
+                    tool_name="read_file",
+                    content="Private Whetstone memory.",
+                ),
+                app_mod._tool_evidence(
+                    tool_name="search_knowledge_base",
+                    content="Shared knowledge evidence.",
+                ),
+            ],
+        )
+
+        self.assertEqual(
+            handoff["evidence"],
+            [
+                {
+                    "tool_name": "search_knowledge_base",
+                    "content": "Shared knowledge evidence.",
+                    "visibility": "shared",
+                }
+            ],
+        )
 
     def test_chat_loads_approved_memory_and_records_created_proposal(self) -> None:
         agent = _InvokeAgent()

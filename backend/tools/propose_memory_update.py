@@ -17,6 +17,7 @@ def build_propose_memory_update_tool(
     *,
     user_id: str,
     session_id: str | None,
+    agent_id: str = "lighthouse",
     on_proposal_created: ProposalCreatedCallback | None = None,
 ) -> BaseTool:
     """Build an invocation-scoped proposal tool for the local LangChain agent.
@@ -63,6 +64,7 @@ def build_propose_memory_update_tool(
         proposal, created = create_proposal(
             user_id=user_id,
             session_id=session_id,
+            agent_id=agent_id,
             target=target,
             memory_type=memory_type,
             content=content,

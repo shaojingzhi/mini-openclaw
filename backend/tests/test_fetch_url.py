@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+from ipaddress import ip_address
 import unittest
 from unittest.mock import MagicMock, patch
 
-from backend.tools.fetch_url import PARSE_FAILURE_MESSAGE, _clean_html, fetch_url
+from backend.tools.fetch_url import (
+    BLOCKED_URL_MESSAGE,
+    PARSE_FAILURE_MESSAGE,
+    _clean_html,
+    fetch_url,
+)
 
 
 _FIXTURE_HTML = """
@@ -49,16 +55,10 @@ class CleanHtmlTests(unittest.TestCase):
 
 class FetchUrlToolTests(unittest.TestCase):
     def test_fetch_url_returns_cleaned_markdown(self) -> None:
-        # Replace the whole _REQUESTS_TOOL module attribute with a stub for
-        # the duration of the test. We can't patch a method on the live
-        # RequestsGetTool/TextRequestsWrapper instances because both are
-        # Pydantic-v2 models, and patch's teardown delattr() is rejected.
-        stub = MagicMock()
-        stub.invoke.return_value = _FIXTURE_HTML
-        with patch("backend.tools.fetch_url._REQUESTS_TOOL", stub):
+        with patch("backend.tools.fetch_url._fetch_text", return_value=_FIXTURE_HTML) as fetch_text:
             out = fetch_url.invoke({"url": "https://example.invalid/page"})
 
-        stub.invoke.assert_called_once_with({"url": "https://example.invalid/page"})
+        fetch_text.assert_called_once_with("https://example.invalid/page")
         self.assertIn("# Hello, OpenClaw", out)
         self.assertIn("[link](https://example.com/x)", out)
         self.assertNotIn("<script", out)
@@ -67,15 +67,36 @@ class FetchUrlToolTests(unittest.TestCase):
         self.assertFalse(out.endswith("\n"))
 
     def test_fetch_url_returns_clear_message_when_parse_fails(self) -> None:
-        stub = MagicMock()
-        stub.invoke.return_value = "<html>huge response</html>"
-        with patch("backend.tools.fetch_url._REQUESTS_TOOL", stub), patch(
+        with patch("backend.tools.fetch_url._fetch_text", return_value="<html>huge response</html>"), patch(
             "backend.tools.fetch_url._clean_html",
             side_effect=ValueError("parse failed"),
         ):
             out = fetch_url.invoke({"url": "https://example.invalid/page"})
 
         self.assertEqual(out, PARSE_FAILURE_MESSAGE)
+
+    def test_blocks_loopback_private_and_non_http_urls_before_request(self) -> None:
+        for url in ("http://127.0.0.1:8002/health", "http://10.0.0.1", "file:///etc/passwd"):
+            with self.subTest(url=url), patch("backend.tools.fetch_url.requests.get") as get:
+                self.assertEqual(fetch_url.invoke({"url": url}), BLOCKED_URL_MESSAGE)
+                get.assert_not_called()
+
+    def test_blocks_hostname_that_resolves_to_private_address(self) -> None:
+        with patch("backend.tools.fetch_url._resolve_host", return_value={ip_address("192.168.1.10")}), patch(
+            "backend.tools.fetch_url.requests.get"
+        ) as get:
+            out = fetch_url.invoke({"url": "http://internal.example"})
+
+        self.assertEqual(out, BLOCKED_URL_MESSAGE)
+        get.assert_not_called()
+
+    def test_validates_redirect_targets_before_following_them(self) -> None:
+        redirect = MagicMock(status_code=302, headers={"Location": "http://127.0.0.1:8002/health"})
+        with patch("backend.tools.fetch_url.requests.get", return_value=redirect) as get:
+            out = fetch_url.invoke({"url": "https://8.8.8.8/start"})
+
+        self.assertEqual(out, BLOCKED_URL_MESSAGE)
+        get.assert_called_once()
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -22,6 +22,12 @@ const targetLabels: Record<MemoryProposal["target"], string> = {
   relationship_memory: "Relationship primer",
 };
 
+const agentLabels = {
+  lighthouse: "灯塔",
+  spark: "火花",
+  whetstone: "砥石",
+} as const;
+
 function formatProposalTime(timestamp: string): string {
   const date = new Date(timestamp);
   return Number.isNaN(date.valueOf())
@@ -88,6 +94,9 @@ export function MemoryApprovalCard({
               Why the agent proposed it
             </div>
             <p className="mt-2 text-sm leading-6 text-slate-600">{proposal.rationale}</p>
+            <p className="mt-3 text-xs font-medium text-slate-600">
+              Memory owner: {proposal.visibility === "shared" ? "Shared by all agents" : agentLabels[proposal.agent_id || "lighthouse"]}
+            </p>
             <div className="mt-3 flex items-center gap-2 text-xs text-slate-500">
               <Clock3 className="h-3.5 w-3.5" />
               {proposal.session_id || "current session"} · {formatProposalTime(proposal.created_at)}

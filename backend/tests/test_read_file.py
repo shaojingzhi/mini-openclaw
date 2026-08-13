@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import importlib
 import unittest
+from unittest.mock import Mock, patch
 
-from backend.tools.read_file import PROJECT_ROOT, read_file
+read_file_mod = importlib.import_module("backend.tools.read_file")
+
+PROJECT_ROOT = read_file_mod.PROJECT_ROOT
+read_file = read_file_mod.read_file
 
 
 class ReadFileToolTests(unittest.TestCase):
@@ -35,6 +40,35 @@ class ReadFileToolTests(unittest.TestCase):
         # Inside-root miss is a distinct error from outside-root denial.
         self.assertIn("no such file", out)
         self.assertNotIn("Access denied", out)
+
+    def test_scoped_tool_allows_own_private_projection(self) -> None:
+        scoped = read_file_mod.build_read_file_tool(agent_id="spark")
+        own_path = "backend/memory/approved_memory/agents/spark/RELATIONSHIP.md"
+        reader = Mock()
+        reader.invoke.return_value = "spark memory"
+
+        with patch.object(read_file_mod, "_READ_FILE_TOOL", reader):
+            out = scoped.invoke({"file_path": own_path})
+
+        self.assertEqual(out, "spark memory")
+        reader.invoke.assert_called_once_with({"file_path": own_path})
+
+    def test_scoped_tool_rejects_other_agent_private_projection(self) -> None:
+        scoped = read_file_mod.build_read_file_tool(agent_id="spark")
+        private_paths = (
+            "backend/memory/approved_memory/agents/whetstone/RELATIONSHIP.md",
+            "backend/memory/approved_memory/agents/spark/../whetstone/RELATIONSHIP.md",
+            "backend/memory/approved_memory/agents/",
+        )
+        reader = Mock()
+
+        with patch.object(read_file_mod, "_READ_FILE_TOOL", reader):
+            for private_path in private_paths:
+                with self.subTest(private_path=private_path):
+                    out = scoped.invoke({"file_path": private_path})
+                    self.assertEqual(out, read_file_mod.PRIVATE_MEMORY_BLOCKED_MESSAGE)
+
+        reader.invoke.assert_not_called()
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -8,12 +8,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
+from backend import user_state
+from backend.agents.profiles import DEFAULT_AGENT_ID, list_agent_profiles, normalize_agent_id
 from backend.user_state import DEFAULT_USER_ID, normalize_user_id, user_memory_dir
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -42,6 +45,7 @@ MemorySignalKind = Literal[
 ]
 MemoryScope = Literal["global", "project", "task", "interview_prep"]
 ProposalStatus = Literal["pending", "approved", "rejected"]
+MemoryVisibility = Literal["shared", "agent_private"]
 
 _VALID_TARGETS = {
     "user_capsule",
@@ -73,6 +77,7 @@ _LAYER_METADATA: dict[str, tuple[str, str]] = {
     "relationship_memory": ("RELATIONSHIP.md", "Relationship Primer"),
 }
 MATERIALIZED_DIRNAME = "approved_memory"
+_PRIVATE_TARGETS = {"agent_behavior", "relationship_memory"}
 
 
 class ProposalNotFoundError(LookupError):
@@ -103,10 +108,30 @@ def materialized_memory_dir(user_id: str | None = None) -> Path:
     return _memory_dir_for_user(normalized_user_id) / MATERIALIZED_DIRNAME
 
 
-def materialized_memory_paths(user_id: str | None = None) -> dict[str, Path]:
+def materialized_memory_paths(
+    user_id: str | None = None,
+    agent_id: str = DEFAULT_AGENT_ID,
+) -> dict[str, Path]:
     """Return the fixed target-to-Markdown mapping for a user's projection."""
-    directory = materialized_memory_dir(user_id)
-    return {target: directory / filename for target, (filename, _) in _LAYER_METADATA.items()}
+    return _materialized_memory_paths_for_dir(
+        materialized_memory_dir(user_id),
+        agent_id=agent_id,
+    )
+
+
+def _materialized_memory_paths_for_dir(
+    directory: Path,
+    *,
+    agent_id: str = DEFAULT_AGENT_ID,
+) -> dict[str, Path]:
+    normalized_agent_id = normalize_agent_id(agent_id)
+    paths: dict[str, Path] = {}
+    for target, (filename, _) in _LAYER_METADATA.items():
+        if target in _PRIVATE_TARGETS:
+            paths[target] = directory / "agents" / normalized_agent_id / filename
+        else:
+            paths[target] = directory / filename
+    return paths
 
 
 def _read_records(path: Path) -> list[dict[str, Any]]:
@@ -131,11 +156,24 @@ def _read_records(path: Path) -> list[dict[str, Any]]:
 
 
 def _write_records(path: Path, records: list[dict[str, Any]]) -> None:
+    staged_path = _stage_records(path, records)
+    try:
+        _commit_staged_records(staged_path, path)
+    except Exception:
+        staged_path.unlink(missing_ok=True)
+        raise
+
+
+def _stage_records(path: Path, records: list[dict[str, Any]]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     body = "".join(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n" for record in records)
-    temporary_path = path.with_suffix(path.suffix + ".tmp")
-    temporary_path.write_text(body, encoding="utf-8")
-    temporary_path.replace(path)
+    staged_path = path.with_name(f".{path.name}.stage-{uuid.uuid4().hex}")
+    staged_path.write_text(body, encoding="utf-8")
+    return staged_path
+
+
+def _commit_staged_records(staged_path: Path, target_path: Path) -> None:
+    staged_path.replace(target_path)
 
 
 def _required_text(value: str, *, name: str, limit: int) -> str:
@@ -170,13 +208,38 @@ def _content_hash(content: str) -> str:
 
 
 def _copy_record(record: dict[str, Any]) -> dict[str, Any]:
-    return dict(record)
+    copied = dict(record)
+    target = str(copied.get("target", ""))
+    owner, visibility = _memory_owner(target, copied.get("agent_id"))
+    copied["agent_id"] = owner
+    copied["visibility"] = visibility
+    return copied
+
+
+def _memory_owner(target: str, agent_id: str | None) -> tuple[str | None, MemoryVisibility]:
+    if target in _PRIVATE_TARGETS:
+        return normalize_agent_id(agent_id), "agent_private"
+    return None, "shared"
+
+
+def _record_owner(record: dict[str, Any]) -> str | None:
+    target = str(record.get("target", ""))
+    if target not in _PRIVATE_TARGETS:
+        return None
+    return normalize_agent_id(record.get("agent_id") or DEFAULT_AGENT_ID)
+
+
+def is_memory_visible_to_agent(record: dict[str, Any], agent_id: str) -> bool:
+    normalized_agent_id = normalize_agent_id(agent_id)
+    target = str(record.get("target", ""))
+    return target not in _PRIVATE_TARGETS or _record_owner(record) == normalized_agent_id
 
 
 def create_proposal(
     *,
     user_id: str | None,
     session_id: str | None,
+    agent_id: str | None = None,
     target: MemoryTarget,
     memory_type: MemoryType,
     content: str,
@@ -198,6 +261,7 @@ def create_proposal(
     normalized_confidence = _validate_choice(confidence, name="confidence", allowed=_VALID_CONFIDENCES)
     normalized_signal = _validate_choice(signal_kind, name="signal_kind", allowed=_VALID_SIGNAL_KINDS)
     normalized_scope = _validate_choice(scope, name="scope", allowed=_VALID_SCOPES)
+    normalized_agent_id, visibility = _memory_owner(normalized_target, agent_id)
     normalized_content = _required_text(content, name="content", limit=2_000)
     normalized_rationale = _required_text(rationale, name="rationale", limit=1_000)
     normalized_source_message_id = _optional_text(source_message_id, name="source_message_id", limit=200)
@@ -214,6 +278,7 @@ def create_proposal(
                 record.get("target") == normalized_target
                 and record.get("memory_type") == normalized_type
                 and record.get("content_hash") == content_hash
+                and _record_owner(record) == normalized_agent_id
                 and record.get("status") in {"pending", "approved"}
             ):
                 return _copy_record(record), False
@@ -223,6 +288,8 @@ def create_proposal(
             "status": "pending",
             "user_id": normalized_user_id,
             "session_id": _optional_text(session_id, name="session_id", limit=200),
+            "agent_id": normalized_agent_id,
+            "visibility": visibility,
             "target": normalized_target,
             "memory_type": normalized_type,
             "content": normalized_content,
@@ -260,12 +327,19 @@ def list_proposals(
 
 
 def list_approved_memories(
-    *, user_id: str | None, limit: int = MAX_BOOTSTRAP_MEMORIES
+    *,
+    user_id: str | None,
+    agent_id: str = DEFAULT_AGENT_ID,
+    limit: int = MAX_BOOTSTRAP_MEMORIES,
 ) -> list[dict[str, Any]]:
     """Return the bounded active-memory set used during the next bootstrap."""
     if limit <= 0:
         return []
-    approved = list_proposals(user_id=user_id, status="approved")
+    approved = [
+        record
+        for record in list_proposals(user_id=user_id, status="approved")
+        if is_memory_visible_to_agent(record, agent_id)
+    ]
     return list(reversed(approved[:limit]))
 
 
@@ -290,6 +364,8 @@ def _format_materialized_layer(title: str, records: list[dict[str, Any]]) -> str
                 "Provenance:",
                 f"- type: {record['memory_type']}",
                 f"- scope: {record['scope']}",
+                f"- visibility: {record.get('visibility') or ('agent_private' if record['target'] in _PRIVATE_TARGETS else 'shared')}",
+                f"- agent_id: {_record_owner(record) or 'shared'}",
                 f"- source_session_id: {record.get('session_id') or 'unknown'}",
                 f"- source_message_id: {record.get('source_message_id') or 'unknown'}",
                 f"- rationale: {record['rationale']}",
@@ -311,22 +387,140 @@ def materialize_approved_memories(*, user_id: str | None) -> dict[str, Path]:
     normalized_user_id = normalize_user_id(user_id)
     with _STORE_LOCK:
         records = _read_records(proposals_path(normalized_user_id))
-        return _materialize_records(user_id=normalized_user_id, records=records)
+        staging = _stage_projection(user_id=normalized_user_id, records=records)
+        target = materialized_memory_dir(normalized_user_id)
+        backup: Path | None = None
+        try:
+            backup = _activate_projection(staging=staging, target=target)
+        except Exception:
+            _remove_directory(staging)
+            raise
+        _remove_directory(backup)
+        return materialized_memory_paths(normalized_user_id)
 
 
-def _materialize_records(*, user_id: str, records: list[dict[str, Any]]) -> dict[str, Path]:
+def _known_memory_user_ids() -> list[str]:
+    user_ids = {DEFAULT_USER_ID}
+    try:
+        user_directories = list(user_state.DATA_USERS_DIR.iterdir())
+    except OSError:
+        user_directories = []
+    for directory in user_directories:
+        if not directory.is_dir():
+            continue
+        try:
+            user_ids.add(normalize_user_id(directory.name))
+        except ValueError:
+            continue
+    return sorted(user_ids)
+
+
+def _remove_stale_transaction_artifacts(memory_dir: Path) -> None:
+    for pattern in (
+        f".{MATERIALIZED_DIRNAME}.stage-*",
+        f".{MATERIALIZED_DIRNAME}.backup-*",
+    ):
+        for artifact in memory_dir.glob(pattern):
+            _remove_directory(artifact)
+    for artifact in memory_dir.glob(f".{PROPOSALS_FILENAME}.stage-*"):
+        if artifact.is_dir():
+            _remove_directory(artifact)
+        else:
+            artifact.unlink(missing_ok=True)
+
+
+def recover_memory_projections() -> dict[str, dict[str, Path]]:
+    """Repair interrupted projection transactions from JSONL on service startup.
+
+    The JSONL proposal store is authoritative. Any leftover staging or backup
+    path is discarded, then the approved-memory projection is regenerated for
+    every user namespace that has persisted memory state.
+    """
+    recovered: dict[str, dict[str, Path]] = {}
+    with _STORE_LOCK:
+        for user_id in _known_memory_user_ids():
+            memory_dir = _memory_dir_for_user(user_id)
+            has_persisted_state = (
+                proposals_path(user_id).exists()
+                or materialized_memory_dir(user_id).exists()
+                or any(memory_dir.glob(f".{MATERIALIZED_DIRNAME}.*"))
+                or any(memory_dir.glob(f".{PROPOSALS_FILENAME}.stage-*"))
+            )
+            if not has_persisted_state:
+                continue
+            _remove_stale_transaction_artifacts(memory_dir)
+            recovered[user_id] = materialize_approved_memories(user_id=user_id)
+    return recovered
+
+
+def _materialize_records(
+    *,
+    user_id: str,
+    records: list[dict[str, Any]],
+    output_dir: Path | None = None,
+) -> dict[str, Path]:
     approved_records = [record for record in records if record.get("status") == "approved"]
-    records_by_target = {target: [] for target in _LAYER_METADATA}
-    for record in approved_records:
-        target = record.get("target")
-        if target in records_by_target:
-            records_by_target[target].append(record)
-
-    paths = materialized_memory_paths(user_id)
-    for target, path in paths.items():
+    directory = output_dir or materialized_memory_dir(user_id)
+    default_paths = _materialized_memory_paths_for_dir(directory)
+    for target in _LAYER_METADATA:
+        if target in _PRIVATE_TARGETS:
+            continue
+        path = default_paths[target]
         _, title = _LAYER_METADATA[target]
-        _write_records_as_markdown(path, _format_materialized_layer(title, records_by_target[target]))
-    return paths
+        target_records = [record for record in approved_records if record.get("target") == target]
+        _write_records_as_markdown(path, _format_materialized_layer(title, target_records))
+
+    for profile in list_agent_profiles():
+        paths = _materialized_memory_paths_for_dir(directory, agent_id=profile.agent_id)
+        for target in _PRIVATE_TARGETS:
+            _, title = _LAYER_METADATA[target]
+            target_records = [
+                record
+                for record in approved_records
+                if record.get("target") == target and _record_owner(record) == profile.agent_id
+            ]
+            _write_records_as_markdown(
+                paths[target],
+                _format_materialized_layer(f"{title} · {profile.display_name}", target_records),
+            )
+    return default_paths
+
+
+def _stage_projection(*, user_id: str, records: list[dict[str, Any]]) -> Path:
+    target = materialized_memory_dir(user_id)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    staging = target.with_name(f".{target.name}.stage-{uuid.uuid4().hex}")
+    try:
+        _materialize_records(user_id=user_id, records=records, output_dir=staging)
+    except Exception:
+        _remove_directory(staging)
+        raise
+    return staging
+
+
+def _activate_projection(*, staging: Path, target: Path) -> Path | None:
+    backup = target.with_name(f".{target.name}.backup-{uuid.uuid4().hex}")
+    had_existing_projection = target.exists()
+    if had_existing_projection:
+        target.replace(backup)
+    try:
+        staging.replace(target)
+    except Exception:
+        if had_existing_projection:
+            backup.replace(target)
+        raise
+    return backup if had_existing_projection else None
+
+
+def _restore_projection(*, target: Path, backup: Path | None) -> None:
+    _remove_directory(target)
+    if backup is not None and backup.exists():
+        backup.replace(target)
+
+
+def _remove_directory(path: Path | None) -> None:
+    if path is not None and path.exists():
+        shutil.rmtree(path)
 
 
 def _write_records_as_markdown(path: Path, content: str) -> None:
@@ -364,8 +558,35 @@ def decide_proposal(
             record["decided_by"] = normalize_user_id(decided_by or normalized_user_id)
             record["decision_reason"] = normalized_reason
             if decision == "approved":
-                _materialize_records(user_id=normalized_user_id, records=records)
-            _write_records(path, records)
+                projection_staging = _stage_projection(
+                    user_id=normalized_user_id,
+                    records=records,
+                )
+                records_staging: Path | None = None
+                projection_target = materialized_memory_dir(normalized_user_id)
+                projection_backup: Path | None = None
+                projection_active = False
+                try:
+                    records_staging = _stage_records(path, records)
+                    projection_backup = _activate_projection(
+                        staging=projection_staging,
+                        target=projection_target,
+                    )
+                    projection_active = True
+                    _commit_staged_records(records_staging, path)
+                except Exception:
+                    if projection_active:
+                        _restore_projection(
+                            target=projection_target,
+                            backup=projection_backup,
+                        )
+                    _remove_directory(projection_staging)
+                    if records_staging is not None:
+                        records_staging.unlink(missing_ok=True)
+                    raise
+                _remove_directory(projection_backup)
+            else:
+                _write_records(path, records)
             return _copy_record(record)
 
     raise ProposalNotFoundError(f"proposal {proposal_id} was not found")
@@ -379,10 +600,12 @@ __all__ = [
     "ProposalStateError",
     "create_proposal",
     "decide_proposal",
+    "is_memory_visible_to_agent",
     "list_approved_memories",
     "list_proposals",
     "materialize_approved_memories",
     "materialized_memory_dir",
     "materialized_memory_paths",
     "proposals_path",
+    "recover_memory_projections",
 ]

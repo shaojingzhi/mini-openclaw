@@ -13,7 +13,10 @@ import unittest
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage
 
+from backend.agents.profiles import get_agent_profile
 from backend.graph.agent import CORE_TOOLS, build_agent
+from backend.tools.read_file import PRIVATE_MEMORY_BLOCKED_MESSAGE, read_file
+from backend.tools.terminal import SCOPED_BLOCKED_MESSAGE, terminal
 
 
 class _ToolBindingFakeChatModel(GenericFakeChatModel):
@@ -66,6 +69,47 @@ class BuildAgentTests(unittest.TestCase):
 
         tools_by_name = agent.get_graph().nodes["tools"].data.tools_by_name
         self.assertIn("propose_memory_update", tools_by_name)
+
+    def test_only_lighthouse_receives_handoff_tool(self) -> None:
+        lighthouse = build_agent(
+            model=self._fake_model("ok"),
+            agent_profile=get_agent_profile("lighthouse"),
+        )
+        spark = build_agent(
+            model=self._fake_model("ok"),
+            agent_profile=get_agent_profile("spark"),
+        )
+
+        lighthouse_tools = lighthouse.get_graph().nodes["tools"].data.tools_by_name
+        spark_tools = spark.get_graph().nodes["tools"].data.tools_by_name
+        self.assertIn("request_agent_handoff", lighthouse_tools)
+        self.assertNotIn("request_agent_handoff", spark_tools)
+
+    def test_agent_uses_scoped_filesystem_tools(self) -> None:
+        spark = build_agent(
+            model=self._fake_model("ok"),
+            agent_profile=get_agent_profile("spark"),
+        )
+        tools_by_name = spark.get_graph().nodes["tools"].data.tools_by_name
+
+        self.assertIsNot(tools_by_name["read_file"], read_file)
+        self.assertIsNot(tools_by_name["terminal"], terminal)
+        self.assertEqual(
+            tools_by_name["read_file"].invoke(
+                {
+                    "file_path": (
+                        "backend/memory/approved_memory/agents/whetstone/RELATIONSHIP.md"
+                    )
+                }
+            ),
+            PRIVATE_MEMORY_BLOCKED_MESSAGE,
+        )
+        self.assertEqual(
+            tools_by_name["terminal"].invoke(
+                {"command": "ls backend/memory/approved_memory/agents/whetstone"}
+            ),
+            SCOPED_BLOCKED_MESSAGE,
+        )
 
 
 if __name__ == "__main__":

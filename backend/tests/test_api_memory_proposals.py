@@ -75,6 +75,39 @@ class ApiMemoryProposalTests(unittest.TestCase):
         self.assertEqual(repeated.status_code, 409)
         self.assertEqual(invalid_filter.status_code, 422)
 
+    def test_rebuilds_projection_from_jsonl_source_of_truth(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch.object(ps_mod, "MEMORY_DIR", root / "memory"):
+                proposal = self._proposal(
+                    user_id="anonymous",
+                    content="Use the approved interview framing.",
+                )
+                ps_mod.decide_proposal(
+                    user_id="anonymous",
+                    proposal_id=proposal["proposal_id"],
+                    decision="approved",
+                )
+                projection = ps_mod.materialized_memory_paths()["user_capsule"]
+                projection.write_text("tampered projection\n", encoding="utf-8")
+
+                client = TestClient(app_mod.app)
+                response = client.post("/api/memory/projections/rebuild")
+                rebuilt = projection.read_text(encoding="utf-8")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["paths"]["user_capsule"], str(projection))
+        self.assertIn("Use the approved interview framing.", rebuilt)
+        self.assertNotIn("tampered projection", rebuilt)
+
+    def test_app_startup_recovers_memory_projections(self) -> None:
+        with patch.object(ps_mod, "recover_memory_projections") as recover:
+            with TestClient(app_mod.app) as client:
+                response = client.get("/health")
+
+        self.assertEqual(response.status_code, 200)
+        recover.assert_called_once_with()
+
 
 if __name__ == "__main__":
     unittest.main()

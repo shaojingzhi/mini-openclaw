@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowRight, Bot, Loader2, MessageSquareText, ShieldCheck, Sparkles } from "lucide-react";
+import { ArrowRight, Bot, Flame, Loader2, MessageSquareText, ShieldCheck, Sparkles } from "lucide-react";
 import { Toaster, toast } from "sonner";
 
 import { MemoryApprovalCard } from "@/components/chat/memory-approval-card";
@@ -15,19 +15,55 @@ import {
   listSessions,
   rejectMemoryProposal,
   streamChat,
+  type AgentId,
+  type AgentIdentity,
   type ChatEvent,
   type MemoryProposal,
+  type SessionMessage,
   type SessionSummary,
 } from "@/lib/api";
 
 type TraceItem =
-  | { kind: "thought"; content: string }
-  | { kind: "tool_call"; name: string; input?: unknown }
-  | { kind: "tool_result"; name: string; content: string };
+  | { kind: "thought"; agentId: AgentId; content: string }
+  | { kind: "tool_call"; agentId: AgentId; name: string; input?: unknown }
+  | { kind: "tool_result"; agentId: AgentId; name: string; content: string };
 
 type ChatMessage =
   | { id: string; role: "user"; content: string }
-  | { id: string; role: "assistant"; content: string; trace: TraceItem[] };
+  | {
+      id: string;
+      role: "assistant";
+      content: string;
+      trace: TraceItem[];
+      agent: AgentIdentity;
+      routeReason?: "default_host" | "explicit_mention";
+      matchedMention?: string | null;
+      handoff?: { handoffId: string; fromAgentId: AgentId; fromDisplayName: string; reason: string };
+    };
+
+const agentDirectory: Record<AgentId, AgentIdentity> = {
+  lighthouse: { agent_id: "lighthouse", display_name: "灯塔", english_name: "Lighthouse", accent: "emerald" },
+  spark: { agent_id: "spark", display_name: "火花", english_name: "Spark", accent: "amber" },
+  whetstone: { agent_id: "whetstone", display_name: "砥石", english_name: "Whetstone", accent: "sky" },
+};
+
+const agentStyles: Record<AgentId, { article: string; badge: string; icon: typeof Bot }> = {
+  lighthouse: {
+    article: "border-emerald-200 bg-[linear-gradient(135deg,#ecfdf5,#ffffff)]",
+    badge: "bg-emerald-100 text-emerald-800",
+    icon: Bot,
+  },
+  spark: {
+    article: "border-amber-200 bg-[linear-gradient(135deg,#fffbeb,#ffffff)]",
+    badge: "bg-amber-100 text-amber-800",
+    icon: Flame,
+  },
+  whetstone: {
+    article: "border-sky-200 bg-[linear-gradient(135deg,#f0f9ff,#ffffff)]",
+    badge: "bg-sky-100 text-sky-800",
+    icon: ShieldCheck,
+  },
+};
 
 function createMessageId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -37,7 +73,7 @@ function createSessionId(): string {
   return `session-${Date.now()}`;
 }
 
-function toChatMessages(items: Array<{ role: string; content: string }>): ChatMessage[] {
+function toChatMessages(items: SessionMessage[]): ChatMessage[] {
   return items
     .filter((item) => item.role === "user" || item.role === "assistant")
     .map((item, index) => {
@@ -49,16 +85,60 @@ function toChatMessages(items: Array<{ role: string; content: string }>): ChatMe
         } satisfies ChatMessage;
       }
 
+      const agentId = item.author_agent_id && item.author_agent_id in agentDirectory ? item.author_agent_id : "lighthouse";
+      const agent = {
+        ...agentDirectory[agentId],
+        display_name: item.author_agent_name || agentDirectory[agentId].display_name,
+        accent: item.author_agent_accent || agentDirectory[agentId].accent,
+      };
+      const handoffFrom = item.handoff_from_agent_id ? agentDirectory[item.handoff_from_agent_id] : null;
       return {
         id: `session-assistant-${index}`,
         role: "assistant",
         content: item.content,
         trace: [],
+        agent,
+        routeReason: item.route_reason || undefined,
+        handoff: handoffFrom
+          ? {
+              handoffId: item.handoff_id || "handoff_legacy",
+              fromAgentId: handoffFrom.agent_id,
+              fromDisplayName: handoffFrom.display_name,
+              reason: item.handoff_reason || "A second perspective was requested.",
+            }
+          : undefined,
       } satisfies ChatMessage;
     });
 }
 
 function appendEvent(message: Extract<ChatMessage, { role: "assistant" }>, event: ChatEvent): Extract<ChatMessage, { role: "assistant" }> {
+  if (event.type === "agent_route") {
+    return {
+      ...message,
+      agent: {
+        agent_id: event.agent_id,
+        display_name: event.display_name,
+        english_name: event.english_name,
+        accent: event.accent,
+      },
+      routeReason: event.route_reason,
+      matchedMention: event.matched_mention,
+    };
+  }
+
+  if (event.type === "handoff") {
+    return {
+      ...message,
+      agent: agentDirectory[event.to_agent_id],
+      handoff: {
+        handoffId: event.handoff_id,
+        fromAgentId: event.from_agent_id,
+        fromDisplayName: event.from_display_name,
+        reason: event.reason,
+      },
+    };
+  }
+
   if (event.type === "final") {
     return { ...message, content: message.content + event.content };
   }
@@ -66,21 +146,31 @@ function appendEvent(message: Extract<ChatMessage, { role: "assistant" }>, event
   if (event.type === "thought") {
     return {
       ...message,
-      trace: [...message.trace, { kind: "thought", content: event.content }],
+      trace: [...message.trace, { kind: "thought", agentId: event.agent_id, content: event.content }],
     };
   }
 
   if (event.type === "tool_call") {
     return {
       ...message,
-      trace: [...message.trace, { kind: "tool_call", name: event.name, input: event.input }],
+      trace: [...message.trace, { kind: "tool_call", agentId: event.agent_id, name: event.name, input: event.input }],
     };
   }
 
   return {
     ...message,
-    trace: [...message.trace, { kind: "tool_result", name: event.name, content: event.content }],
+    trace: [...message.trace, { kind: "tool_result", agentId: event.agent_id, name: event.name, content: event.content }],
   };
+}
+
+function traceSummary(item: TraceItem): string {
+  if (item.kind === "thought") {
+    return item.content;
+  }
+  if (item.kind === "tool_call") {
+    return `Called ${item.name}`;
+  }
+  return `${item.name}: ${item.content}`;
 }
 
 const starterMessages: ChatMessage[] = [
@@ -88,15 +178,17 @@ const starterMessages: ChatMessage[] = [
     id: "starter-assistant",
     role: "assistant",
     content:
-      "Hi, I am Mini-OpenClaw. Ask me to inspect the project, explain the agent design, or help shape an interview-ready answer. For traces, files, settings, and Graph RAG diagnostics, open the Workbench.",
+      "我是灯塔，默认陪你维护上下文和推进任务。需要发散时可以 @火花，需要严格校验时可以 @砥石；我也会在确有必要时显式转交一次。",
     trace: [],
+    agent: agentDirectory.lighthouse,
+    routeReason: "default_host",
   },
 ];
 
 const quickPrompts = [
   "Summarize Mini-OpenClaw as an AI agent project in 4 bullets.",
-  "Explain the difference between the chat home and the workbench.",
-  "Give me a 90-second interview pitch for this project.",
+  "@火花 找出这个项目还能体现哪些 AI Agent 能力。",
+  "@砥石 严格评审我的 90 秒项目介绍。",
 ] as const;
 
 export function ChatHomePage() {
@@ -246,6 +338,7 @@ export function ChatHomePage() {
       role: "assistant",
       content: "",
       trace: [],
+      agent: agentDirectory.lighthouse,
     };
 
     setDraft("");
@@ -386,12 +479,40 @@ export function ChatHomePage() {
                         );
                       }
 
+                      const presentation = agentStyles[message.agent.agent_id];
+                      const AgentIcon = presentation.icon;
                       return (
-                        <article key={message.id} className="ml-auto max-w-[88%] rounded-[22px] border border-emerald-200 bg-[linear-gradient(135deg,#ecfdf5,#ffffff)] px-5 py-4">
-                          <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-emerald-700">Mini-OpenClaw</p>
+                        <article key={message.id} className={`ml-auto max-w-[88%] rounded-[22px] border px-5 py-4 ${presentation.article}`}>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ${presentation.badge}`}>
+                              <AgentIcon className="h-3.5 w-3.5" />
+                              {message.agent.display_name}
+                            </span>
+                            <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">{message.agent.english_name}</span>
+                          </div>
+                          {message.handoff ? (
+                            <div className="mt-3 rounded-xl border border-white/80 bg-white/70 px-3 py-2 text-xs leading-5 text-slate-600">
+                              <span className="font-semibold text-slate-800">{message.handoff.fromDisplayName} → {message.agent.display_name}</span>
+                              <span> · {message.handoff.reason}</span>
+                              <span className="ml-1 font-mono text-[10px] text-slate-400">#{message.handoff.handoffId.slice(-8)}</span>
+                            </div>
+                          ) : null}
+                          {!message.handoff && message.routeReason === "explicit_mention" ? (
+                            <p className="mt-2 text-xs font-medium text-slate-500">按 {message.matchedMention || `@${message.agent.display_name}`} 定向路由</p>
+                          ) : null}
                           <p className="mt-2 whitespace-pre-wrap text-sm leading-7 text-slate-700">
                             {message.content || (isStreaming ? "Thinking..." : "Waiting for response...")}
                           </p>
+                          {message.trace.length > 0 ? (
+                            <div className="mt-3 space-y-1.5 border-t border-white/80 pt-3 text-xs text-slate-500">
+                              {message.trace.map((item, index) => (
+                                <p key={`${message.id}-trace-${index}`} className="flex gap-2 leading-5">
+                                  <span className={`shrink-0 font-semibold ${agentStyles[item.agentId].badge}`}>{agentDirectory[item.agentId].display_name}</span>
+                                  <span className="break-words">{traceSummary(item)}</span>
+                                </p>
+                              ))}
+                            </div>
+                          ) : null}
                         </article>
                       );
                     })}
@@ -418,7 +539,7 @@ export function ChatHomePage() {
                     className="h-13 min-h-13 rounded-2xl border-slate-200 bg-slate-50 px-4 text-base"
                     disabled={isStreaming || isLoadingSession}
                     onChange={(event) => setDraft(event.target.value)}
-                    placeholder="Ask Mini-OpenClaw..."
+                    placeholder="问灯塔，或使用 @火花 / @砥石 定向提问..."
                     ref={composerRef}
                     value={draft}
                   />

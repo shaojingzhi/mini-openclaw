@@ -6,31 +6,63 @@ export type ModelSettings = {
   model: string;
 };
 
-export type ChatEventType = "thought" | "tool_call" | "tool_result" | "final";
+export type AgentId = "lighthouse" | "spark" | "whetstone";
+
+export type AgentIdentity = {
+  agent_id: AgentId;
+  display_name: string;
+  english_name: string;
+  accent: string;
+};
+
+export type ChatEventType = "agent_route" | "handoff" | "thought" | "tool_call" | "tool_result" | "final";
+
+export type AgentRouteEvent = AgentIdentity & {
+  type: "agent_route";
+  route_reason: "default_host" | "explicit_mention";
+  matched_mention: string | null;
+};
+
+export type HandoffEvent = {
+  type: "handoff";
+  handoff_id: string;
+  from_agent_id: AgentId;
+  from_display_name: string;
+  to_agent_id: AgentId;
+  to_display_name: string;
+  to_accent: string;
+  task: string;
+  reason: string;
+  evidence_count: number;
+};
 
 export type ThoughtEvent = {
   type: "thought";
+  agent_id: AgentId;
   content: string;
 };
 
 export type ToolCallEvent = {
   type: "tool_call";
+  agent_id: AgentId;
   name: string;
   input?: unknown;
 };
 
 export type ToolResultEvent = {
   type: "tool_result";
+  agent_id: AgentId;
   name: string;
   content: string;
 };
 
 export type FinalEvent = {
   type: "final";
+  agent_id: AgentId;
   content: string;
 };
 
-export type ChatEvent = ThoughtEvent | ToolCallEvent | ToolResultEvent | FinalEvent;
+export type ChatEvent = AgentRouteEvent | HandoffEvent | ThoughtEvent | ToolCallEvent | ToolResultEvent | FinalEvent;
 
 export type SessionSummary = {
   name: string;
@@ -41,6 +73,13 @@ export type SessionSummary = {
 export type SessionMessage = {
   role: string;
   content: string;
+  author_agent_id?: AgentId | null;
+  author_agent_name?: string | null;
+  author_agent_accent?: string | null;
+  route_reason?: "default_host" | "explicit_mention" | null;
+  handoff_id?: string | null;
+  handoff_from_agent_id?: AgentId | null;
+  handoff_reason?: string | null;
 };
 
 export type MemoryProposalStatus = "pending" | "approved" | "rejected";
@@ -49,6 +88,8 @@ export type MemoryProposal = {
   proposal_id: string;
   status: MemoryProposalStatus;
   session_id: string | null;
+  agent_id: AgentId | null;
+  visibility: "shared" | "agent_private";
   target: "user_capsule" | "project_memory" | "agent_behavior" | "relationship_memory";
   memory_type: "user_preference" | "project_convention" | "task_state" | "behavior_preference";
   content: string;
@@ -70,12 +111,22 @@ export type TraceSummary = {
   final_status: string;
   error_category: string | null;
   created_at: string | null;
+  selected_agent_id: AgentId | null;
+  active_agent_id: AgentId | null;
+  route_reason: string | null;
+  handoff_count: number;
+  last_handoff_id?: string | null;
 };
 
 export type TraceDetail = {
   trace_id: string;
   session_id: string;
   user_id: string | null;
+  selected_agent_id: AgentId | null;
+  active_agent_id: AgentId | null;
+  route_reason: string | null;
+  handoff_count: number;
+  last_handoff_id?: string | null;
   start_time: string;
   end_time: string | null;
   latency_ms: number | null;
@@ -145,10 +196,25 @@ export type FilePayload = {
 };
 
 type ChatEventPayload = {
+  accent?: unknown;
+  agent_id?: unknown;
   content?: unknown;
+  display_name?: unknown;
+  english_name?: unknown;
   error_category?: unknown;
+  evidence_count?: unknown;
+  from_agent_id?: unknown;
+  from_display_name?: unknown;
+  handoff_id?: unknown;
   input?: unknown;
+  matched_mention?: unknown;
   name?: unknown;
+  reason?: unknown;
+  route_reason?: unknown;
+  task?: unknown;
+  to_accent?: unknown;
+  to_agent_id?: unknown;
+  to_display_name?: unknown;
 };
 
 type ApiErrorBody = {
@@ -159,6 +225,10 @@ type ApiErrorBody = {
   recoverable?: unknown;
   trace_id?: unknown;
 };
+
+function toAgentId(value: unknown, fallback: AgentId = "lighthouse"): AgentId {
+  return value === "lighthouse" || value === "spark" || value === "whetstone" ? value : fallback;
+}
 
 function buildApiUrl(path: string): string {
   return new URL(path, API_BASE_URL).toString();
@@ -193,9 +263,37 @@ async function assertResponseOk(response: Response, action: string): Promise<Res
 }
 
 function toChatEvent(type: string, payload: ChatEventPayload): ChatEvent | null {
+  if (type === "agent_route") {
+    return {
+      type,
+      agent_id: toAgentId(payload.agent_id),
+      display_name: typeof payload.display_name === "string" ? payload.display_name : "灯塔",
+      english_name: typeof payload.english_name === "string" ? payload.english_name : "Lighthouse",
+      accent: typeof payload.accent === "string" ? payload.accent : "emerald",
+      route_reason: payload.route_reason === "explicit_mention" ? "explicit_mention" : "default_host",
+      matched_mention: typeof payload.matched_mention === "string" ? payload.matched_mention : null,
+    };
+  }
+
+  if (type === "handoff") {
+    return {
+      type,
+      handoff_id: typeof payload.handoff_id === "string" ? payload.handoff_id : "handoff_unknown",
+      from_agent_id: toAgentId(payload.from_agent_id),
+      from_display_name: typeof payload.from_display_name === "string" ? payload.from_display_name : "灯塔",
+      to_agent_id: toAgentId(payload.to_agent_id),
+      to_display_name: typeof payload.to_display_name === "string" ? payload.to_display_name : "灯塔",
+      to_accent: typeof payload.to_accent === "string" ? payload.to_accent : "emerald",
+      task: typeof payload.task === "string" ? payload.task : "",
+      reason: typeof payload.reason === "string" ? payload.reason : "",
+      evidence_count: typeof payload.evidence_count === "number" ? payload.evidence_count : 0,
+    };
+  }
+
   if (type === "thought") {
     return {
       type,
+      agent_id: toAgentId(payload.agent_id),
       content: typeof payload.content === "string" ? payload.content : "",
     };
   }
@@ -203,6 +301,7 @@ function toChatEvent(type: string, payload: ChatEventPayload): ChatEvent | null 
   if (type === "tool_call") {
     return {
       type,
+      agent_id: toAgentId(payload.agent_id),
       name: typeof payload.name === "string" ? payload.name : "tool",
       input: payload.input,
     };
@@ -211,6 +310,7 @@ function toChatEvent(type: string, payload: ChatEventPayload): ChatEvent | null 
   if (type === "tool_result") {
     return {
       type,
+      agent_id: toAgentId(payload.agent_id),
       name: typeof payload.name === "string" ? payload.name : "tool",
       content: typeof payload.content === "string" ? payload.content : "",
     };
@@ -219,6 +319,7 @@ function toChatEvent(type: string, payload: ChatEventPayload): ChatEvent | null 
   if (type === "final") {
     return {
       type,
+      agent_id: toAgentId(payload.agent_id),
       content: typeof payload.content === "string" ? payload.content : "",
     };
   }

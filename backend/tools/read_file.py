@@ -13,11 +13,17 @@ from __future__ import annotations
 from pathlib import Path
 
 from langchain_community.tools.file_management import ReadFileTool
-from langchain_core.tools import tool
+from langchain_core.tools import BaseTool, tool
+
+from backend.agents.profiles import normalize_agent_id
+from backend.tools.agent_access import can_access_project_path
 
 PROJECT_ROOT: Path = Path(__file__).resolve().parents[2]
 
 _READ_FILE_TOOL: ReadFileTool = ReadFileTool(root_dir=str(PROJECT_ROOT))
+PRIVATE_MEMORY_BLOCKED_MESSAGE = (
+    "[read_file] refused: the requested path belongs to another agent's private memory."
+)
 
 
 @tool("read_file")
@@ -41,4 +47,23 @@ def read_file(file_path: str) -> str:
     return _READ_FILE_TOOL.invoke({"file_path": file_path})
 
 
-__all__ = ["read_file", "PROJECT_ROOT"]
+def build_read_file_tool(*, agent_id: str) -> BaseTool:
+    """Build a read tool that enforces private-memory ownership at invocation time."""
+    normalized_agent_id = normalize_agent_id(agent_id)
+
+    @tool("read_file")
+    def scoped_read_file(file_path: str) -> str:
+        """Read a project file without crossing another agent's private-memory boundary."""
+        if not can_access_project_path(file_path, agent_id=normalized_agent_id):
+            return PRIVATE_MEMORY_BLOCKED_MESSAGE
+        return _READ_FILE_TOOL.invoke({"file_path": file_path})
+
+    return scoped_read_file
+
+
+__all__ = [
+    "PRIVATE_MEMORY_BLOCKED_MESSAGE",
+    "PROJECT_ROOT",
+    "build_read_file_tool",
+    "read_file",
+]

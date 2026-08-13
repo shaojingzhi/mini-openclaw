@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -113,6 +114,95 @@ class MemoryProposalStoreTests(unittest.TestCase):
                 self.assertIn("# Relationship Primer", relationship.read_text(encoding="utf-8"))
                 self.assertIn(proposal["proposal_id"], relationship.read_text(encoding="utf-8"))
 
+    def test_private_memories_are_visible_only_to_their_agent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch.object(ps_mod, "MEMORY_DIR", root / "memory"):
+                shared, _ = ps_mod.create_proposal(
+                    user_id="anonymous",
+                    session_id="main",
+                    agent_id="lighthouse",
+                    target="project_memory",
+                    memory_type="project_convention",
+                    content="Run backend tests before delivery.",
+                    rationale="This convention applies to the shared project.",
+                )
+                spark, _ = ps_mod.create_proposal(
+                    user_id="anonymous",
+                    session_id="main",
+                    agent_id="spark",
+                    target="relationship_memory",
+                    memory_type="behavior_preference",
+                    content="Start by exploring two alternatives.",
+                    rationale="The user requested this style from Spark.",
+                )
+                whetstone, _ = ps_mod.create_proposal(
+                    user_id="anonymous",
+                    session_id="main",
+                    agent_id="whetstone",
+                    target="agent_behavior",
+                    memory_type="behavior_preference",
+                    content="Always state the riskiest assumption.",
+                    rationale="The user requested this behavior from Whetstone.",
+                )
+                for proposal in (shared, spark, whetstone):
+                    ps_mod.decide_proposal(
+                        user_id="anonymous",
+                        proposal_id=proposal["proposal_id"],
+                        decision="approved",
+                    )
+
+                spark_memories = ps_mod.list_approved_memories(
+                    user_id="anonymous", agent_id="spark"
+                )
+                whetstone_memories = ps_mod.list_approved_memories(
+                    user_id="anonymous", agent_id="whetstone"
+                )
+                spark_projection = ps_mod.materialized_memory_paths(
+                    agent_id="spark"
+                )["relationship_memory"]
+                whetstone_projection = ps_mod.materialized_memory_paths(
+                    agent_id="whetstone"
+                )["relationship_memory"]
+                spark_projection_content = spark_projection.read_text(encoding="utf-8")
+                whetstone_projection_content = whetstone_projection.read_text(encoding="utf-8")
+
+        self.assertEqual(
+            {memory["proposal_id"] for memory in spark_memories},
+            {shared["proposal_id"], spark["proposal_id"]},
+        )
+        self.assertEqual(
+            {memory["proposal_id"] for memory in whetstone_memories},
+            {shared["proposal_id"], whetstone["proposal_id"]},
+        )
+        self.assertNotEqual(spark_projection, whetstone_projection)
+        self.assertIn("Start by exploring", spark_projection_content)
+        self.assertNotIn("Start by exploring", whetstone_projection_content)
+
+    def test_legacy_private_record_defaults_to_lighthouse(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch.object(ps_mod, "MEMORY_DIR", root / "memory"):
+                path = ps_mod.proposals_path()
+                path.parent.mkdir(parents=True)
+                path.write_text(
+                    json.dumps(
+                        {
+                            "proposal_id": "memprop_legacy",
+                            "status": "approved",
+                            "target": "relationship_memory",
+                            "memory_type": "behavior_preference",
+                            "content": "Legacy relationship context.",
+                        }
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+                record = ps_mod.list_proposals(user_id="anonymous")[0]
+
+        self.assertEqual(record["agent_id"], "lighthouse")
+        self.assertEqual(record["visibility"], "agent_private")
+
     def test_projection_failure_leaves_proposal_pending(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -128,6 +218,88 @@ class MemoryProposalStoreTests(unittest.TestCase):
 
                 pending = ps_mod.list_proposals(user_id="anonymous", status="pending")
                 self.assertEqual([record["proposal_id"] for record in pending], [proposal["proposal_id"]])
+
+    def test_jsonl_commit_failure_restores_previous_projection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch.object(ps_mod, "MEMORY_DIR", root / "memory"):
+                existing, _ = self._create(content="Keep replies concise.")
+                ps_mod.decide_proposal(
+                    user_id="anonymous",
+                    proposal_id=existing["proposal_id"],
+                    decision="approved",
+                )
+                pending, _ = self._create(content="Always include three alternatives.")
+                proposals_path = ps_mod.proposals_path()
+                projection_path = ps_mod.materialized_memory_paths()["user_capsule"]
+                original_records = proposals_path.read_text(encoding="utf-8")
+                original_projection = projection_path.read_text(encoding="utf-8")
+
+                with patch.object(
+                    ps_mod,
+                    "_commit_staged_records",
+                    side_effect=OSError("json commit failed"),
+                ):
+                    with self.assertRaisesRegex(OSError, "json commit failed"):
+                        ps_mod.decide_proposal(
+                            user_id="anonymous",
+                            proposal_id=pending["proposal_id"],
+                            decision="approved",
+                        )
+
+                self.assertEqual(
+                    proposals_path.read_text(encoding="utf-8"),
+                    original_records,
+                )
+                self.assertEqual(
+                    projection_path.read_text(encoding="utf-8"),
+                    original_projection,
+                )
+                self.assertNotIn("Always include three alternatives.", original_projection)
+                self.assertEqual(
+                    [
+                        record["proposal_id"]
+                        for record in ps_mod.list_proposals(
+                            status="pending",
+                            user_id="anonymous",
+                        )
+                    ],
+                    [pending["proposal_id"]],
+                )
+                memory_dir = root / "memory"
+                self.assertEqual(list(memory_dir.glob(".approved_memory.stage-*")), [])
+                self.assertEqual(list(memory_dir.glob(".approved_memory.backup-*")), [])
+                self.assertEqual(list(memory_dir.glob(".memory_proposals.jsonl.stage-*")), [])
+
+    def test_startup_recovery_rebuilds_projection_and_removes_transaction_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch.object(ps_mod, "MEMORY_DIR", root / "memory"):
+                proposal, _ = self._create(content="Recover this approved memory.")
+                ps_mod.decide_proposal(
+                    user_id="anonymous",
+                    proposal_id=proposal["proposal_id"],
+                    decision="approved",
+                )
+                memory_dir = root / "memory"
+                projection = ps_mod.materialized_memory_paths()["user_capsule"]
+                projection.write_text("interrupted projection\n", encoding="utf-8")
+                (memory_dir / ".approved_memory.backup-interrupted").mkdir()
+                (memory_dir / ".approved_memory.stage-interrupted").mkdir()
+                (memory_dir / ".memory_proposals.jsonl.stage-interrupted").write_text(
+                    "incomplete",
+                    encoding="utf-8",
+                )
+
+                recovered = ps_mod.recover_memory_projections()
+                rebuilt = projection.read_text(encoding="utf-8")
+
+        self.assertIn("anonymous", recovered)
+        self.assertIn("Recover this approved memory.", rebuilt)
+        self.assertNotIn("interrupted projection", rebuilt)
+        self.assertEqual(list(memory_dir.glob(".approved_memory.stage-*")), [])
+        self.assertEqual(list(memory_dir.glob(".approved_memory.backup-*")), [])
+        self.assertEqual(list(memory_dir.glob(".memory_proposals.jsonl.stage-*")), [])
 
     def test_cannot_decide_missing_or_already_decided_proposal(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

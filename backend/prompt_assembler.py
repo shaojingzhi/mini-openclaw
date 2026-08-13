@@ -18,7 +18,10 @@ Order:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from backend.agents.profiles import AgentProfile
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 WORKSPACE_DIR = PROJECT_ROOT / "backend" / "workspace"
@@ -93,13 +96,32 @@ def _format_approved_memories(approved_memories: list[dict[str, Any]]) -> str:
     return _maybe_truncate("\n".join(lines), MAX_APPROVED_MEMORY_CHARS)
 
 
-def build_system_prompt(*, approved_memories: list[dict[str, Any]] | None = None) -> str:
+def _format_agent_profile(agent_profile: AgentProfile) -> str:
+    return "\n".join(
+        [
+            f"Agent ID: {agent_profile.agent_id}",
+            f"Display name: {agent_profile.display_name} ({agent_profile.english_name})",
+            f"Persona: {agent_profile.persona_prompt}",
+            f"Cognitive focus: {agent_profile.cognitive_focus}",
+            f"Community role: {agent_profile.community_role}",
+            "Keep this identity stable while respecting system safety rules and user-approved memory.",
+        ]
+    )
+
+
+def build_system_prompt(
+    *,
+    approved_memories: list[dict[str, Any]] | None = None,
+    agent_profile: AgentProfile | None = None,
+) -> str:
     """Assemble static prompt files plus bounded user-approved memory."""
     parts: list[str] = []
     for display_name, path in _section_paths():
         header = f"# === {display_name} ==="
         body = _maybe_truncate(_load_file(path))
         parts.append(f"{header}\n{body}")
+    if agent_profile is not None:
+        parts.append(f"# === ACTIVE_AGENT ===\n{_format_agent_profile(agent_profile)}")
     if approved_memories:
         dynamic_memory = _format_approved_memories(approved_memories)
         if dynamic_memory:

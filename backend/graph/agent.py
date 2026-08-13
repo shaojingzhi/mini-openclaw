@@ -29,10 +29,14 @@ from langchain.agents import create_agent
 from langchain_core.language_models import BaseChatModel
 from langchain_openai import ChatOpenAI
 
+from backend.agents.profiles import DEFAULT_AGENT_ID, AgentProfile, get_agent_profile
 from backend.prompt_assembler import build_system_prompt
 from backend.settings import get_settings
 from backend.tools import (
     build_propose_memory_update_tool,
+    build_read_file_tool,
+    build_request_handoff_tool,
+    build_terminal_tool,
     fetch_url,
     python_repl,
     read_file,
@@ -72,6 +76,9 @@ def build_agent(
     session_id: str | None = None,
     approved_memories: list[dict[str, Any]] | None = None,
     on_memory_proposal_created: Callable[[dict[str, Any]], None] | None = None,
+    agent_profile: AgentProfile | None = None,
+    allow_handoff: bool = True,
+    on_handoff_requested: Callable[[dict[str, Any]], None] | None = None,
 ) -> Any:
     """Build the Mini-OpenClaw Agent.
 
@@ -92,15 +99,32 @@ def build_agent(
         base_url=base_url,
         model=model_name,
     )
-    system_prompt = build_system_prompt(approved_memories=approved_memories)
+    active_profile = agent_profile or get_agent_profile(DEFAULT_AGENT_ID)
+    system_prompt = build_system_prompt(
+        approved_memories=approved_memories,
+        agent_profile=active_profile,
+    )
     tools = [
-        *CORE_TOOLS,
+        build_terminal_tool(agent_id=active_profile.agent_id),
+        python_repl,
+        fetch_url,
+        build_read_file_tool(agent_id=active_profile.agent_id),
+        search_knowledge_base,
         build_propose_memory_update_tool(
             user_id=user_id,
             session_id=session_id,
+            agent_id=active_profile.agent_id,
             on_proposal_created=on_memory_proposal_created,
         ),
     ]
+    if allow_handoff and active_profile.allowed_handoff_targets:
+        tools.append(
+            build_request_handoff_tool(
+                from_agent_id=active_profile.agent_id,
+                allowed_targets=active_profile.allowed_handoff_targets,
+                on_handoff_requested=on_handoff_requested,
+            )
+        )
     return create_agent(
         model=chat_model,
         tools=tools,

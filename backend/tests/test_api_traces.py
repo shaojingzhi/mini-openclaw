@@ -26,7 +26,12 @@ class ApiTracesTests(unittest.TestCase):
                 tr_mod.finalize_trace(first, final_status="success")
                 tr_mod.save_trace(first)
 
-                second = tr_mod.create_trace(session_id="beta", model_name="gpt-5.4")
+                second = tr_mod.create_trace(
+                    session_id="beta",
+                    model_name="gpt-5.4",
+                    selected_agent_id="spark",
+                    route_reason="explicit_mention",
+                )
                 second["trace_id"] = "trace_b"
                 tr_mod.finalize_trace(second, final_status="error")
                 tr_mod.save_trace(second)
@@ -39,6 +44,9 @@ class ApiTracesTests(unittest.TestCase):
         self.assertEqual([item["trace_id"] for item in body["traces"]], ["trace_b", "trace_a"])
         self.assertEqual(body["traces"][0]["final_status"], "error")
         self.assertIsNone(body["traces"][0]["error_category"])
+        self.assertEqual(body["traces"][0]["active_agent_id"], "spark")
+        self.assertEqual(body["traces"][0]["route_reason"], "explicit_mention")
+        self.assertEqual(body["traces"][0]["handoff_count"], 0)
         self.assertEqual(body["traces"][1]["final_status"], "success")
 
     def test_get_trace_returns_full_payload(self) -> None:
