@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from backend.settings import get_settings
+from backend.runtime_errors import sanitize_error_text
 
 PROJECT_ROOT: Path = get_settings().project_root
 KNOWLEDGE_DIR: Path = get_settings().knowledge_dir
@@ -82,6 +83,7 @@ def _node(
     *,
     path: str | None = None,
     metadata: dict[str, Any] | None = None,
+    summary: str | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "id": node_id,
@@ -91,6 +93,8 @@ def _node(
     }
     if path is not None:
         payload["path"] = path
+    if summary:
+        payload["summary"] = summary
     return payload
 
 
@@ -134,6 +138,67 @@ def _concepts_from_text(text: str, *, limit: int = 12) -> list[str]:
     ]
 
 
+def _safe_source_excerpt(text: str, *, limit: int = 480) -> str:
+    """Keep a bounded, readable document excerpt for graph evidence cards."""
+    lines: list[str] = []
+    in_frontmatter = False
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if line == "---":
+            in_frontmatter = not in_frontmatter
+            continue
+        if in_frontmatter or not line or line.startswith("```"):
+            continue
+        normalized = sanitize_error_text(re.sub(r"^#{1,6}\s*", "", line))
+        normalized = re.sub(r"\s+", " ", normalized)
+        if normalized:
+            lines.append(normalized)
+        excerpt = " ".join(lines)
+        if len(excerpt) >= limit:
+            return excerpt[:limit].rstrip() + "..."
+    return " ".join(lines)[:limit]
+
+
+def _heading_excerpt(text: str, heading: str, *, limit: int = 320) -> str:
+    marker = re.compile(rf"^#+\s+{re.escape(heading)}\s*$", re.IGNORECASE)
+    matched = False
+    lines: list[str] = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if marker.match(line):
+            matched = True
+            continue
+        if not matched:
+            continue
+        if HEADING_PATTERN.match(line):
+            break
+        if line and not line.startswith("```"):
+            lines.append(sanitize_error_text(re.sub(r"\s+", " ", line)))
+        excerpt = " ".join(lines)
+        if len(excerpt) >= limit:
+            return excerpt[:limit].rstrip() + "..."
+    return " ".join(lines)[:limit]
+
+
+def _evidence_node(node: dict[str, Any]) -> dict[str, Any]:
+    """Add a bounded source excerpt for graphs generated before summary support."""
+    evidence = dict(node)
+    if isinstance(evidence.get("summary"), str) and evidence["summary"].strip():
+        return evidence
+    raw_path = evidence.get("path")
+    if not isinstance(raw_path, str) or not raw_path.strip():
+        return evidence
+    candidate = (PROJECT_ROOT / raw_path).resolve()
+    try:
+        candidate.relative_to(PROJECT_ROOT.resolve())
+    except ValueError:
+        return evidence
+    summary = _safe_source_excerpt(_read_text(candidate))
+    if summary:
+        evidence["summary"] = summary
+    return evidence
+
+
 def _add_markdown_file(
     nodes: dict[str, dict[str, Any]],
     edges: dict[str, dict[str, Any]],
@@ -144,6 +209,7 @@ def _add_markdown_file(
 ) -> None:
     rel_path = _relative_path(path)
     text = _read_text(path)
+    source_excerpt = _safe_source_excerpt(text)
     node_id = _stable_id(node_type, rel_path)
     label = path.parent.name if node_type == "skill" else path.name
     _add_node(
@@ -154,6 +220,7 @@ def _add_markdown_file(
             label,
             path=rel_path,
             metadata={"chars": len(text), "source_root": _relative_path(root)},
+            summary=source_excerpt,
         ),
     )
 
@@ -168,6 +235,7 @@ def _add_markdown_file(
                 heading_label,
                 path=rel_path,
                 metadata={"level": len(level)},
+                summary=_heading_excerpt(text, heading_label) or source_excerpt,
             ),
         )
         _add_edge(edges, _edge(node_id, heading_id, "contains"))
@@ -310,22 +378,75 @@ def load_graph(path: Path = GRAPH_PATH) -> dict[str, Any] | None:
 
 
 def graph_summary(graph: dict[str, Any]) -> dict[str, Any]:
-    """Return compact counts for graph diagnostics."""
+    """Return compact, inspectable graph diagnostics with a bounded sample."""
     node_counts: dict[str, int] = {}
     edge_counts: dict[str, int] = {}
-    for node in graph.get("nodes", []):
+    nodes = [node for node in graph.get("nodes", []) if isinstance(node, dict)]
+    edges = [edge for edge in graph.get("edges", []) if isinstance(edge, dict)]
+    for node in nodes:
         node_type = str(node.get("type", "unknown"))
         node_counts[node_type] = node_counts.get(node_type, 0) + 1
-    for edge in graph.get("edges", []):
+    for edge in edges:
         edge_type = str(edge.get("type", "unknown"))
         edge_counts[edge_type] = edge_counts.get(edge_type, 0) + 1
+
+    nodes_by_id = {str(node.get("id")): node for node in nodes}
+    node_type_priority = {
+        "workspace_file": 0,
+        "skill": 1,
+        "document": 2,
+        "trace": 3,
+        "heading": 4,
+        "tool": 5,
+        "concept": 6,
+    }
+    preview_nodes = sorted(
+        nodes,
+        key=lambda node: (
+            node_type_priority.get(str(node.get("type")), 99),
+            str(node.get("label", "")).lower(),
+        ),
+    )[:8]
+    preview_node_ids = {str(node.get("id")) for node in preview_nodes}
+    related_edges = [
+        edge
+        for edge in edges
+        if str(edge.get("source")) in preview_node_ids or str(edge.get("target")) in preview_node_ids
+    ]
+    preview_edges = sorted(
+        related_edges,
+        key=lambda edge: (
+            str(edge.get("type", "")),
+            str(edge.get("source", "")),
+            str(edge.get("target", "")),
+        ),
+    )[:10]
+
+    def preview_node(node: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "id": str(node.get("id", "")),
+            "type": str(node.get("type", "unknown")),
+            "label": str(node.get("label") or node.get("path") or node.get("id") or "untitled"),
+            "path": node.get("path"),
+        }
+
     return {
         "schema_version": graph.get("schema_version"),
-        "node_count": len(graph.get("nodes", [])),
-        "edge_count": len(graph.get("edges", [])),
+        "node_count": len(nodes),
+        "edge_count": len(edges),
         "node_counts": dict(sorted(node_counts.items())),
         "edge_counts": dict(sorted(edge_counts.items())),
         "sources": graph.get("sources", {}),
+        "preview_nodes": [preview_node(node) for node in preview_nodes],
+        "preview_edges": [
+            {
+                "id": str(edge.get("id", "")),
+                "type": str(edge.get("type", "unknown")),
+                "source": preview_node(nodes_by_id.get(str(edge.get("source")), {"id": edge.get("source")})),
+                "target": preview_node(nodes_by_id.get(str(edge.get("target")), {"id": edge.get("target")})),
+            }
+            for edge in preview_edges
+        ],
     }
 
 
@@ -381,6 +502,7 @@ def expand_graph_evidence(
     visited = set(direct_ids)
     frontier = list(direct_ids)
     expanded_ids: list[str] = []
+    expansion_paths: dict[str, dict[str, str]] = {}
     edge_types: set[str] = set()
 
     for _ in range(max_hops):
@@ -393,6 +515,11 @@ def expand_graph_evidence(
                     continue
                 visited.add(target_id)
                 expanded_ids.append(target_id)
+                expansion_paths[target_id] = {
+                    "from_node_id": node_id,
+                    "edge_type": str(edge.get("type", "unknown")),
+                    "from_title": str(nodes_by_id.get(node_id, {}).get("label") or nodes_by_id.get(node_id, {}).get("path") or node_id),
+                }
                 next_frontier.append(target_id)
                 if len(expanded_ids) >= max_nodes:
                     break
@@ -402,18 +529,32 @@ def expand_graph_evidence(
             break
         frontier = next_frontier
 
-    evidence_ids = direct_ids + expanded_ids
+    available_direct_ids = [node_id for node_id in direct_ids if node_id in nodes_by_id]
+    available_expanded_ids = [node_id for node_id in expanded_ids if node_id in nodes_by_id]
+    if available_direct_ids and available_expanded_ids:
+        display_limit = max(2, max_nodes)
+        direct_limit = max(1, display_limit // 2)
+        expanded_limit = max(1, display_limit - direct_limit)
+    else:
+        display_limit = max_nodes
+        direct_limit = display_limit
+        expanded_limit = display_limit
+    displayed_direct_ids = available_direct_ids[:direct_limit]
+    displayed_expanded_ids = available_expanded_ids[:expanded_limit]
+    evidence_ids = displayed_direct_ids + displayed_expanded_ids
     evidence = [
-        nodes_by_id[node_id]
-        for node_id in evidence_ids[:max_nodes]
-        if node_id in nodes_by_id
+        _evidence_node(nodes_by_id[node_id])
+        for node_id in evidence_ids
     ]
     return {
         "available": True,
         "direct_node_ids": direct_ids,
         "expanded_node_ids": expanded_ids[:max_nodes],
+        "displayed_direct_node_ids": displayed_direct_ids,
+        "displayed_expanded_node_ids": displayed_expanded_ids,
         "edge_types": sorted(edge_types),
         "evidence": evidence,
+        "expansion_paths": expansion_paths,
     }
 
 

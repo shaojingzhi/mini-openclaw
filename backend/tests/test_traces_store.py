@@ -52,6 +52,17 @@ class TracesStoreTests(unittest.TestCase):
         self.assertEqual(trace["error_message"], "tool timed out")
         self.assertTrue(trace["recoverable"])
 
+    def test_record_error_redacts_sensitive_detail(self) -> None:
+        trace = tr_mod.create_trace(session_id="main", model_name="gpt-5.4")
+        tr_mod.record_error(
+            trace,
+            category="model_invalid_format",
+            detail="provider failed api_key=secret-token",
+            friendly_message="Try again.",
+            recoverable=False,
+        )
+        self.assertNotIn("secret-token", trace["error_message"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -7,7 +7,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from fastapi.testclient import TestClient
 
@@ -160,7 +160,9 @@ class ApiTracesTests(unittest.TestCase):
             sessions_dir = Path(tmp) / "sessions"
             with patch.object(tr_mod, "TRACES_DIR", traces_dir), patch.object(
                 app_mod.sessions_store, "SESSIONS_DIR", sessions_dir
-            ), patch.object(graph_mod, "expand_graph_evidence", return_value=graph_result):
+            ), patch.object(graph_mod, "expand_graph_evidence", return_value=graph_result), patch.object(
+                app_mod, "search_knowledge_base", Mock(invoke=Mock(side_effect=["direct evidence", "graph evidence"]))
+            ):
                 client = TestClient(app_mod.app)
                 response = client.post(
                     "/api/graph/demo",
@@ -176,8 +178,32 @@ class ApiTracesTests(unittest.TestCase):
         self.assertIsNotNone(trace)
         self.assertEqual(trace["model_name"], "graph-demo-local")
         self.assertEqual(trace["graph_retrieval"]["evidence_count"], 1)
+        self.assertEqual(trace["graph_retrieval"]["comparison"]["expanded_evidence_count"], 1)
         self.assertEqual(trace["events"][1]["kind"], "tool_call")
-        self.assertEqual(trace["events"][2]["kind"], "graph_retrieval")
+        self.assertEqual(trace["events"][3]["kind"], "tool_call")
+        self.assertIn("graph_direct_vs_graph", [event["kind"] for event in trace["events"]])
+
+    def test_graph_trace_chain_keeps_an_expanded_entry_after_direct_overflow(self) -> None:
+        graph = {
+            "nodes": [
+                *[
+                    {"id": f"document:{index}", "type": "document", "label": f"match {index}", "metadata": {}}
+                    for index in range(10)
+                ],
+                {"id": "heading:expanded", "type": "heading", "label": "Expanded context", "summary": "Useful source excerpt.", "metadata": {}},
+            ],
+            "edges": [{"id": "edge:1", "source": "document:0", "target": "heading:expanded", "type": "contains", "metadata": {}}],
+        }
+        result = graph_mod.expand_graph_evidence("match", graph=graph, max_hops=1, max_nodes=4)
+        trace = tr_mod.create_trace(session_id="main", model_name="graph-demo-local")
+
+        app_mod._record_graph_result(trace, result)
+
+        chain = trace["graph_retrieval"]["evidence_chain"]
+        self.assertIn("expanded", [item["origin"] for item in chain])
+        expanded = next(item for item in chain if item["origin"] == "expanded")
+        self.assertEqual(expanded["summary"], "Useful source excerpt.")
+        self.assertEqual(expanded["expanded_from_title"], "match 0")
 
 
 if __name__ == "__main__":

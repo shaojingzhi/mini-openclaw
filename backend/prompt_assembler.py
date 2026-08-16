@@ -20,6 +20,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from backend.agents.profiles import load_agent_persona
+
 if TYPE_CHECKING:
     from backend.agents.profiles import AgentProfile
 
@@ -97,11 +99,14 @@ def _format_approved_memories(approved_memories: list[dict[str, Any]]) -> str:
 
 
 def _format_agent_profile(agent_profile: AgentProfile) -> str:
+    persona = load_agent_persona(agent_profile)
     return "\n".join(
         [
             f"Agent ID: {agent_profile.agent_id}",
             f"Display name: {agent_profile.display_name} ({agent_profile.english_name})",
-            f"Persona: {agent_profile.persona_prompt}",
+            f"Persona source: {agent_profile.persona_path}",
+            "Persona:",
+            persona,
             f"Cognitive focus: {agent_profile.cognitive_focus}",
             f"Community role: {agent_profile.community_role}",
             "Keep this identity stable while respecting system safety rules and user-approved memory.",

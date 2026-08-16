@@ -16,9 +16,11 @@ FRONTEND_PORT="${MINI_OPENCLAW_FRONTEND_PORT:-3004}"
 
 BACKEND_URL="http://${BACKEND_HOST}:${BACKEND_PORT}"
 FRONTEND_URL="http://${FRONTEND_HOST}:${FRONTEND_PORT}"
+FRONTEND_API_URL="${NEXT_PUBLIC_API_URL:-http://127.0.0.1:${BACKEND_PORT}}"
+CORS_ORIGINS="${MINI_OPENCLAW_CORS_ORIGINS:-http://localhost:${FRONTEND_PORT},http://127.0.0.1:${FRONTEND_PORT}}"
 
-BACKEND_CMD=("$ROOT_DIR/.venv/bin/python" -m uvicorn backend.app:app --host "$BACKEND_HOST" --port "$BACKEND_PORT")
-FRONTEND_CMD=("$ROOT_DIR/frontend/node_modules/.bin/next" dev --hostname "$FRONTEND_HOST" --port "$FRONTEND_PORT")
+BACKEND_CMD=(env "MINI_OPENCLAW_CORS_ORIGINS=$CORS_ORIGINS" "$ROOT_DIR/.venv/bin/python" -m uvicorn backend.app:app --host "$BACKEND_HOST" --port "$BACKEND_PORT")
+FRONTEND_CMD=(env "NEXT_PUBLIC_API_URL=$FRONTEND_API_URL" "$ROOT_DIR/frontend/node_modules/.bin/next" dev --hostname "$FRONTEND_HOST" --port "$FRONTEND_PORT")
 
 usage() {
   cat <<EOF

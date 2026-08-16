@@ -162,10 +162,11 @@ class ApiChatTests(unittest.TestCase):
         self.assertEqual(trace["final_status"], "success")
         self.assertEqual(trace["model_name"], os.getenv("OPENAI_MODEL", "gpt-4o-mini"))
         self.assertEqual(len(trace["tool_calls"]), 1)
-        self.assertEqual(len(trace["events"]), 7)
+        self.assertEqual(len(trace["events"]), 8)
         self.assertEqual(trace["events"][1]["kind"], "agent_routed")
         self.assertEqual(trace["events"][2]["kind"], "memory_loaded")
         self.assertEqual(trace["events"][2]["payload"]["memory_count"], 0)
+        self.assertEqual(trace["events"][3]["kind"], "persona_loaded")
 
     def test_streaming_graph_search_records_trace_metadata(self) -> None:
         agent = _GraphStreamingAgent()
@@ -193,15 +194,11 @@ class ApiChatTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         expand_graph.assert_called_once_with("connect eval notes to interview demo")
-        self.assertEqual(
-            trace["graph_retrieval"],
-            {
-                "direct_node_ids": ["document:eval"],
-                "expanded_node_ids": ["workspace:demo", "trace:last"],
-                "edge_types": ["mentions", "contains"],
-                "evidence_count": 2,
-            },
-        )
+        self.assertEqual(trace["graph_retrieval"]["direct_node_ids"], ["document:eval"])
+        self.assertEqual(trace["graph_retrieval"]["expanded_node_ids"], ["workspace:demo", "trace:last"])
+        self.assertEqual(trace["graph_retrieval"]["evidence_count"], 2)
+        self.assertEqual(trace["graph_retrieval"]["evidence_chain"][0]["origin"], "direct")
+        self.assertIn("expanded", [item["origin"] for item in trace["graph_retrieval"]["evidence_chain"]])
         self.assertEqual(trace["events"][-2]["kind"], "graph_retrieval")
         self.assertIn("Graph-expanded evidence", response.text)
 
@@ -292,6 +289,7 @@ class ApiChatTests(unittest.TestCase):
 
     def test_non_streaming_handoff_invokes_target_once_and_persists_provenance(self) -> None:
         built_agents: list[str] = []
+        request_model_configs: list[tuple[object, object, object]] = []
         source_agent = _EvidenceInvokeAgent(
             "host draft",
             "verified evidence " + ("x" * 1_200),
@@ -301,6 +299,9 @@ class ApiChatTests(unittest.TestCase):
         def build_with_handoff(**kwargs):
             agent_id = kwargs["agent_profile"].agent_id
             built_agents.append(agent_id)
+            request_model_configs.append(
+                (kwargs["api_key"], kwargs["base_url"], kwargs["model_name"])
+            )
             if agent_id == "lighthouse":
                 kwargs["on_handoff_requested"](
                     {
@@ -325,16 +326,32 @@ class ApiChatTests(unittest.TestCase):
                 client = TestClient(app_mod.app)
                 response = client.post(
                     "/api/chat",
-                    json={"message": "Review this claim", "session_id": "main", "stream": False},
+                    json={
+                        "message": "Review this claim",
+                        "session_id": "main",
+                        "stream": False,
+                        "api_key": "demo-key",
+                        "base_url": "https://provider.example/v1",
+                        "model": "demo-model",
+                    },
                 )
                 persisted = ss_mod.load_session("main", user_id="anonymous")
                 trace = json.loads(next(traces_dir.glob("*.json")).read_text(encoding="utf-8"))
 
         self.assertEqual(built_agents, ["lighthouse", "whetstone"])
+        self.assertEqual(
+            request_model_configs,
+            [
+                ("demo-key", "https://provider.example/v1", "demo-model"),
+                ("demo-key", "https://provider.example/v1", "demo-model"),
+            ],
+        )
         self.assertEqual(response.json()["reply"], "calibrated answer")
         self.assertEqual(response.json()["agent"]["agent_id"], "whetstone")
         self.assertEqual(persisted[-1]["author_agent_id"], "whetstone")
         self.assertEqual(persisted[-1]["handoff_from_agent_id"], "lighthouse")
+        self.assertEqual(persisted[-1]["handoff_task"], "Validate the interview claim.")
+        self.assertEqual(persisted[-1]["handoff_evidence_count"], 1)
         target_messages = target_agent.payloads[0]["messages"]
         self.assertEqual(target_messages[0]["role"], "system")
         self.assertEqual(target_messages[-1], {"role": "user", "content": "Review this claim"})
@@ -402,16 +419,9 @@ class ApiChatTests(unittest.TestCase):
         self.assertEqual(target_messages[0]["role"], "system")
         self.assertEqual(target_messages[-1], {"role": "user", "content": "Find options"})
         envelope = json.loads(target_messages[0]["content"].splitlines()[-1])
-        self.assertEqual(
-            envelope["evidence"],
-            [
-                {
-                    "tool_name": "search_knowledge_base",
-                    "content": "verified streaming evidence",
-                    "visibility": "shared",
-                }
-            ],
-        )
+        self.assertEqual(envelope["evidence"][0]["tool_name"], "search_knowledge_base")
+        self.assertEqual(envelope["evidence"][0]["content"], "verified streaming evidence")
+        self.assertEqual(envelope["evidence"][0]["provenance"], "shared result from search_knowledge_base")
         handoff_id = persisted[-1]["handoff_id"]
         self.assertEqual(envelope["handoff_id"], handoff_id)
         self.assertEqual(trace["last_handoff_id"], handoff_id)
@@ -436,16 +446,10 @@ class ApiChatTests(unittest.TestCase):
             ],
         )
 
-        self.assertEqual(
-            handoff["evidence"],
-            [
-                {
-                    "tool_name": "search_knowledge_base",
-                    "content": "Shared knowledge evidence.",
-                    "visibility": "shared",
-                }
-            ],
-        )
+        self.assertEqual(len(handoff["evidence"]), 1)
+        self.assertEqual(handoff["evidence"][0]["tool_name"], "search_knowledge_base")
+        self.assertEqual(handoff["evidence"][0]["summary"], "Shared knowledge evidence.")
+        self.assertEqual(handoff["evidence"][0]["provenance"], "shared result from search_knowledge_base")
 
     def test_chat_loads_approved_memory_and_records_created_proposal(self) -> None:
         agent = _InvokeAgent()
@@ -505,6 +509,16 @@ class ApiChatTests(unittest.TestCase):
         self.assertEqual(events_by_kind["memory_loaded"]["layer_counts"], {"user_capsule": 1})
         self.assertEqual(events_by_kind["memory_loaded"]["proposal_ids"], [approved["proposal_id"]])
         self.assertEqual(
+            events_by_kind["memory_loaded"]["records"],
+            [{
+                "proposal_id": approved["proposal_id"],
+                "target": "user_capsule",
+                "owner_agent_id": None,
+                "scope": "global",
+                "visibility": "shared",
+            }],
+        )
+        self.assertEqual(
             events_by_kind["memory_proposal_created"]["proposal_id"], created["proposal_id"]
         )
 
@@ -536,6 +550,60 @@ class ApiChatTests(unittest.TestCase):
         self.assertEqual(trace["error_category"], "tool_timeout")
         self.assertEqual(trace["tool_failures"][0]["name"], "agent_error")
         self.assertEqual(trace["tool_failures"][0]["category"], "tool_timeout")
+
+    def test_malformed_provider_tool_call_records_diagnostic_without_proposal(self) -> None:
+        class _MalformedToolCallAgent:
+            async def ainvoke(self, payload):
+                raise ValueError("ToolMessage missing tool_call_id; api_key=secret-token arguments={}")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            with patch.object(ss_mod, "SESSIONS_DIR", tmp_path / "sessions"), patch.object(
+                us_mod, "DATA_USERS_DIR", tmp_path / "users"
+            ), patch.object(tr_mod, "TRACES_DIR", tmp_path / "traces"), patch.object(
+                app_mod, "build_agent", return_value=_MalformedToolCallAgent()
+            ):
+                response = TestClient(app_mod.app).post(
+                    "/api/chat", json={"message": "remember this", "session_id": "main", "stream": False}
+                )
+                trace = json.loads(next((tmp_path / "traces").glob("*.json")).read_text(encoding="utf-8"))
+
+        self.assertEqual(response.status_code, 502)
+        self.assertEqual(response.json()["error_category"], "provider_tool_call_invalid")
+        diagnostic = next(event for event in trace["events"] if event["kind"] == "provider_tool_call_invalid")
+        self.assertNotIn("secret-token", json.dumps(response.json()))
+        self.assertNotIn("secret-token", json.dumps(trace))
+        self.assertNotIn("secret-token", diagnostic["payload"]["diagnostic"])
+        self.assertFalse(any(event["kind"] == "memory_proposal_created" for event in trace["events"]))
+
+    def test_retry_event_redacts_sensitive_failure_detail(self) -> None:
+        trace = tr_mod.create_trace(session_id="main", model_name="gpt-5.4")
+
+        app_mod._record_retry(trace, category="tool_timeout", detail="api_key=secret-token timed out")
+
+        self.assertNotIn("secret-token", json.dumps(trace))
+
+    def test_authorization_bearer_never_reaches_api_or_trace(self) -> None:
+        class _MalformedToolCallAgent:
+            async def ainvoke(self, payload):
+                raise ValueError("ToolMessage missing tool_call_id; Authorization: Bearer secret-token")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            with patch.object(ss_mod, "SESSIONS_DIR", tmp_path / "sessions"), patch.object(
+                us_mod, "DATA_USERS_DIR", tmp_path / "users"
+            ), patch.object(tr_mod, "TRACES_DIR", tmp_path / "traces"), patch.object(
+                app_mod, "build_agent", return_value=_MalformedToolCallAgent()
+            ):
+                response = TestClient(app_mod.app).post(
+                    "/api/chat", json={"message": "remember this", "session_id": "main", "stream": False}
+                )
+                trace = json.loads(next((tmp_path / "traces").glob("*.json")).read_text(encoding="utf-8"))
+
+        diagnostic = next(event for event in trace["events"] if event["kind"] == "provider_tool_call_invalid")
+        self.assertNotIn("secret-token", json.dumps(response.json()))
+        self.assertNotIn("secret-token", json.dumps(trace))
+        self.assertNotIn("secret-token", diagnostic["payload"]["diagnostic"])
 
     def test_non_streaming_chat_retries_recoverable_failure_once(self) -> None:
         agent = _FlakyRecoverableAgent()

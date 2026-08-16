@@ -17,7 +17,9 @@ come from environment variables and the optional repo-level `.env` file.
 | --- | --- | --- |
 | `MINI_OPENCLAW_BACKEND_HOST` | `0.0.0.0` | Host used when running `python -m backend.app`. |
 | `MINI_OPENCLAW_BACKEND_PORT` | `8002` | Backend port. |
-| `MINI_OPENCLAW_CORS_ORIGINS` | localhost/127.0.0.1 ports `3000` and `3004` | Comma-separated frontend origins. |
+| `MINI_OPENCLAW_CORS_ORIGINS` | localhost/127.0.0.1 ports `3000` and `3004` | Comma-separated frontend origins. It must include the exact frontend origin opened in the browser, for example `http://127.0.0.1:3000`. |
+
+`NEXT_PUBLIC_API_URL` is a frontend build-time variable, not a backend setting. Point it to the backend URL that the browser can reach. For a custom frontend port, set `MINI_OPENCLAW_CORS_ORIGINS` to that frontend origin before starting the backend; do not use wildcard origins with credentialed requests.
 
 ## Storage And Retrieval
 

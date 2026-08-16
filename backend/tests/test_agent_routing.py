@@ -23,6 +23,8 @@ class AgentRoutingTests(unittest.TestCase):
             ["lighthouse", "spark", "whetstone"],
         )
         self.assertTrue(response.json()["agents"][0]["is_default"])
+        self.assertEqual(response.json()["agents"][2]["persona_path"], "backend/agents/personas/whetstone.md")
+        self.assertEqual(response.json()["agents"][0]["allowed_handoff_targets"], ["spark", "whetstone"])
 
     def test_registry_contains_three_stable_personas(self) -> None:
         profiles = list_agent_profiles()

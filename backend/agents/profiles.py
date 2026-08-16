@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal, cast
 
 AgentId = Literal["lighthouse", "spark", "whetstone"]
@@ -15,7 +16,7 @@ class AgentProfile:
     display_name: str
     english_name: str
     aliases: tuple[str, ...]
-    persona_prompt: str
+    persona_path: str
     cognitive_focus: str
     community_role: str
     accent: str
@@ -28,11 +29,7 @@ AGENT_PROFILES: dict[AgentId, AgentProfile] = {
         display_name="灯塔",
         english_name="Lighthouse",
         aliases=("灯塔", "lighthouse"),
-        persona_prompt=(
-            "You are Lighthouse, the steady host. Be calm, reliable, and context-aware. "
-            "Do not rush to judgment or compete for attention. Maintain continuity with "
-            "the user's prior decisions and make the next action clear."
-        ),
+        persona_path="backend/agents/personas/lighthouse.md",
         cognitive_focus="The user's actual goal, prior decisions, and continuity across turns.",
         community_role="Default host who maintains context and coordinates another perspective when useful.",
         accent="emerald",
@@ -43,11 +40,7 @@ AGENT_PROFILES: dict[AgentId, AgentProfile] = {
         display_name="火花",
         english_name="Spark",
         aliases=("火花", "spark"),
-        persona_prompt=(
-            "You are Spark, the curious scout. Explore non-obvious alternatives and point "
-            "out missing evidence or opportunities. Stay grounded: clearly separate verified "
-            "findings from hypotheses and never invent support for an exciting idea."
-        ),
+        persona_path="backend/agents/personas/spark.md",
         cognitive_focus="Evidence gaps, external information, alternatives, and overlooked opportunities.",
         community_role="Scout who broadens the option space with evidence-backed discoveries.",
         accent="amber",
@@ -57,16 +50,35 @@ AGENT_PROFILES: dict[AgentId, AgentProfile] = {
         display_name="砥石",
         english_name="Whetstone",
         aliases=("砥石", "whetstone"),
-        persona_prompt=(
-            "You are Whetstone, the honest calibrator. Be kind to the person and strict with "
-            "the argument. Test assumptions, contradictions, risks, over-promises, and missing "
-            "validation, then offer a practical way to strengthen the work."
-        ),
+        persona_path="backend/agents/personas/whetstone.md",
         cognitive_focus="Assumptions, contradictions, risks, over-promises, and missing validation.",
         community_role="Critic who improves decisions and deliverables without becoming hostile.",
         accent="sky",
     ),
 }
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+class PersonaLoadError(RuntimeError):
+    """Raised when an active agent's versioned persona source is unavailable."""
+
+
+def load_agent_persona(agent_profile: AgentProfile) -> str:
+    """Load the active agent's persona without silently falling back to empty text."""
+    path = PROJECT_ROOT / agent_profile.persona_path
+    try:
+        content = path.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        raise PersonaLoadError(
+            f"Persona file for {agent_profile.agent_id} is unavailable: {agent_profile.persona_path}"
+        ) from exc
+    if not content:
+        raise PersonaLoadError(
+            f"Persona file for {agent_profile.agent_id} is empty: {agent_profile.persona_path}"
+        )
+    return content
 
 
 def get_agent_profile(agent_id: str) -> AgentProfile:
@@ -90,7 +102,9 @@ __all__ = [
     "DEFAULT_AGENT_ID",
     "AgentId",
     "AgentProfile",
+    "PersonaLoadError",
     "get_agent_profile",
     "list_agent_profiles",
+    "load_agent_persona",
     "normalize_agent_id",
 ]

@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from backend.agents.profiles import get_agent_profile
+from backend.agents.profiles import PersonaLoadError, get_agent_profile, list_agent_profiles
 
 # Use importlib so patch.object can find module-level attributes — the
 # package re-export shadow trick noted in progress.txt §Codebase Patterns
@@ -24,6 +24,20 @@ class BuildSystemPromptTests(unittest.TestCase):
         self.assertIn("# === ACTIVE_AGENT ===", prompt)
         self.assertIn("Agent ID: spark", prompt)
         self.assertIn("Display name: 火花 (Spark)", prompt)
+        self.assertIn("Persona source: backend/agents/personas/spark.md", prompt)
+        self.assertIn("You are Spark, the curious scout.", prompt)
+
+    def test_each_profile_has_a_versioned_persona_source(self) -> None:
+        for profile in list_agent_profiles():
+            prompt = pa_mod.build_system_prompt(agent_profile=profile)
+            self.assertIn(profile.persona_path, prompt)
+            self.assertIn("# === ACTIVE_AGENT ===", prompt)
+
+    def test_missing_active_persona_fails_explicitly(self) -> None:
+        profile = get_agent_profile("lighthouse")
+        with patch("backend.agents.profiles.Path.read_text", side_effect=OSError("missing")):
+            with self.assertRaises(PersonaLoadError):
+                pa_mod.build_system_prompt(agent_profile=profile)
 
     def _seed_all(self, workspace: Path, memory: Path, *, oversized: str | None = None) -> None:
         """Write the six expected files with small, distinctive content."""

@@ -12,6 +12,7 @@ type MonacoMarkdownEditorProps = {
   onChange: (value: string) => void;
   onSave: () => void;
   height?: string;
+  readOnly?: boolean;
 };
 
 export function MonacoMarkdownEditor({
@@ -19,6 +20,7 @@ export function MonacoMarkdownEditor({
   onChange,
   onSave,
   height = "100%",
+  readOnly = false,
 }: MonacoMarkdownEditorProps) {
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
 
@@ -60,6 +62,7 @@ export function MonacoMarkdownEditor({
         padding: { top: 12, bottom: 12 },
         renderLineHighlight: "gutter",
         roundedSelection: true,
+        readOnly,
         scrollBeyondLastLine: false,
         tabSize: 2,
         wordWrap: "on",

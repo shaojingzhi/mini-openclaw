@@ -95,8 +95,20 @@ python -m uvicorn backend.app:app --host 127.0.0.1 --port 8002
 
 ```bash
 cd frontend
-npm run dev -- --hostname 127.0.0.1 --port 3004
+NEXT_PUBLIC_API_URL=http://127.0.0.1:8002 npm run dev -- --hostname 127.0.0.1 --port 3004
 ```
+
+前端端口或后端端口不是默认值时，两侧必须对应：`NEXT_PUBLIC_API_URL` 指向后端地址，`MINI_OPENCLAW_CORS_ORIGINS` 包含浏览器实际打开的前端 origin。例如前端 `3000`、后端 `8103`：
+
+```bash
+MINI_OPENCLAW_CORS_ORIGINS=http://127.0.0.1:3000 \
+  python -m uvicorn backend.app:app --host 127.0.0.1 --port 8103
+
+cd frontend
+NEXT_PUBLIC_API_URL=http://127.0.0.1:8103 npm run dev -- --hostname 127.0.0.1 --port 3000
+```
+
+`./scripts/dev.sh start` 会把默认或自定义前端端口同步到后端 CORS 配置，并把对应后端 URL 注入前端。
 
 ## 主要接口
 
@@ -126,6 +138,8 @@ npm run dev -- --hostname 127.0.0.1 --port 3004
 Agent 只能通过 `propose_memory_update` 创建 pending 候选，不能直接写入活跃记忆。聊天首页会弹出 review card 供用户 approve/reject；用户批准后，共享的 USER/PROJECT 层投影到 `approved_memory/`，私有的 AGENT/RELATIONSHIP 层投影到 `approved_memory/agents/{agent_id}/`。下一次聊天只注入共享记忆和当前 Agent 的私有记忆；trace 会记录 `memory_loaded`、`memory_proposal_created`、层级数量与裁剪数量，方便演示与审计。
 
 运行时边界：`fetch_url` 只允许访问解析到公网的 HTTP(S) 地址，并会校验重定向目标；服务启动时会以 JSONL 审计记录为事实源清理遗留 transaction 文件并重建 memory projection。handoff 只会传递标为 shared 的网页或知识库证据。
+
+`propose_memory_update` 需要模型供应商或网关支持标准 OpenAI-compatible function/tool calling。当 provider 返回缺失 `tool_call_id`、空 arguments 或非标准响应时，系统会记录 `provider_tool_call_invalid`，明确提示不能生成记忆提议，并且不会写入 proposal。
 
 ## 验证命令
 
@@ -255,8 +269,20 @@ python -m uvicorn backend.app:app --host 127.0.0.1 --port 8002
 
 ```bash
 cd frontend
-npm run dev -- --hostname 127.0.0.1 --port 3004
+NEXT_PUBLIC_API_URL=http://127.0.0.1:8002 npm run dev -- --hostname 127.0.0.1 --port 3004
 ```
+
+When either port differs from the default, keep both sides aligned: `NEXT_PUBLIC_API_URL` must point to the backend, and `MINI_OPENCLAW_CORS_ORIGINS` must include the actual frontend origin. For frontend `3000` and backend `8103`:
+
+```bash
+MINI_OPENCLAW_CORS_ORIGINS=http://127.0.0.1:3000 \
+  python -m uvicorn backend.app:app --host 127.0.0.1 --port 8103
+
+cd frontend
+NEXT_PUBLIC_API_URL=http://127.0.0.1:8103 npm run dev -- --hostname 127.0.0.1 --port 3000
+```
+
+`./scripts/dev.sh start` synchronizes the default or custom frontend port with the backend CORS configuration and injects the matching backend URL into the frontend.
 
 ## Main API Endpoints
 

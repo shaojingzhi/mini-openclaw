@@ -1,10 +1,8 @@
+import type { ModelSettings } from "@/lib/model-settings";
+
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8002";
 
-export type ModelSettings = {
-  apiKey: string;
-  baseUrl: string;
-  model: string;
-};
+export type { ModelSettings } from "@/lib/model-settings";
 
 export type AgentId = "lighthouse" | "spark" | "whetstone";
 
@@ -13,6 +11,15 @@ export type AgentIdentity = {
   display_name: string;
   english_name: string;
   accent: string;
+  persona_path?: string;
+};
+
+export type AgentProfile = AgentIdentity & {
+  aliases: string[];
+  cognitive_focus: string;
+  community_role: string;
+  allowed_handoff_targets: AgentId[];
+  is_default: boolean;
 };
 
 export type ChatEventType = "agent_route" | "handoff" | "thought" | "tool_call" | "tool_result" | "final";
@@ -68,6 +75,7 @@ export type SessionSummary = {
   name: string;
   last_modified: string;
   message_count: number;
+  preview?: string;
 };
 
 export type SessionMessage = {
@@ -80,6 +88,8 @@ export type SessionMessage = {
   handoff_id?: string | null;
   handoff_from_agent_id?: AgentId | null;
   handoff_reason?: string | null;
+  handoff_task?: string | null;
+  handoff_evidence_count?: number | null;
 };
 
 export type MemoryProposalStatus = "pending" | "approved" | "rejected";
@@ -147,8 +157,28 @@ export type TraceDetail = {
 export type GraphRetrievalMetadata = {
   direct_node_ids: string[];
   expanded_node_ids: string[];
+  displayed_direct_node_ids?: string[];
+  displayed_expanded_node_ids?: string[];
   edge_types: string[];
   evidence_count: number;
+  raw_evidence?: Array<Record<string, unknown>>;
+  evidence_chain?: Array<{
+    id: string;
+    origin: "direct" | "expanded";
+    node_type: string;
+    title: string;
+    path?: string | null;
+    summary?: string | null;
+    expanded_from?: string | null;
+    expanded_from_title?: string | null;
+    edge_type?: string | null;
+  }>;
+  comparison?: {
+    query: string;
+    direct_result: string;
+    graph_result: string;
+    expanded_evidence_count: number;
+  };
 };
 
 export type GraphSummary = {
@@ -158,6 +188,18 @@ export type GraphSummary = {
   node_counts: Record<string, number>;
   edge_counts: Record<string, number>;
   sources: Record<string, string>;
+  preview_nodes?: Array<{
+    id: string;
+    type: string;
+    label: string;
+    path?: string | null;
+  }>;
+  preview_edges?: Array<{
+    id: string;
+    type: string;
+    source: { id: string; type: string; label: string; path?: string | null };
+    target: { id: string; type: string; label: string; path?: string | null };
+  }>;
 };
 
 export type GraphNodeDetail = {
@@ -444,6 +486,14 @@ export async function listSessions(): Promise<SessionSummary[]> {
 
   const body = (await response.json()) as { sessions: SessionSummary[] };
   return body.sessions;
+}
+
+export async function listAgents(): Promise<AgentProfile[]> {
+  const response = await assertResponseOk(
+    await fetch(buildApiUrl("/api/agents"), { cache: "no-store" }),
+    "listAgents",
+  );
+  return ((await response.json()) as { agents: AgentProfile[] }).agents;
 }
 
 export async function getSession(sessionId: string): Promise<SessionMessage[]> {

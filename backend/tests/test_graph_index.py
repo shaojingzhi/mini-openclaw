@@ -78,6 +78,57 @@ class GraphIndexTests(unittest.TestCase):
         self.assertIn("failed_at", edge_types)
         self.assertIn("fetch_url", labels)
         self.assertIn("terminal", labels)
+        document = next(node for node in graph["nodes"] if node["type"] == "document")
+        self.assertIn("Use memory with retrieval", document["summary"])
+
+    def test_expansion_is_displayed_when_direct_matches_exceed_limit(self) -> None:
+        direct_nodes = [
+            {"id": f"document:{index}", "type": "document", "label": f"match {index}", "metadata": {}}
+            for index in range(10)
+        ]
+        expanded_node = {
+            "id": "heading:expanded",
+            "type": "heading",
+            "label": "Useful expanded evidence",
+            "path": "backend/knowledge/notes.md",
+            "summary": "A bounded source excerpt that adds answerable context.",
+            "metadata": {},
+        }
+        graph = {
+            "nodes": [*direct_nodes, expanded_node],
+            "edges": [{"id": "edge:contains", "source": "document:0", "target": "heading:expanded", "type": "contains", "metadata": {}}],
+        }
+
+        result = graph_mod.expand_graph_evidence("match", graph=graph, max_hops=1, max_nodes=4)
+
+        self.assertGreater(len(result["direct_node_ids"]), 4)
+        self.assertIn("heading:expanded", result["expanded_node_ids"])
+        self.assertIn("heading:expanded", [node["id"] for node in result["evidence"]])
+        self.assertIn("heading:expanded", result["displayed_expanded_node_ids"])
+
+    def test_source_excerpt_is_bounded_and_redacts_credentials(self) -> None:
+        excerpt = graph_mod._safe_source_excerpt(
+            "# Notes\napi_key=secret-token\nAuthorization: Bearer secret-token\nUseful evidence.",
+            limit=120,
+        )
+
+        self.assertIn("Useful evidence.", excerpt)
+        self.assertNotIn("secret-token", excerpt)
+
+    def test_old_graph_nodes_gain_source_excerpt_when_read_as_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "knowledge" / "old.md"
+            source.parent.mkdir()
+            source.write_text("# Old graph\nUseful persisted source context.", encoding="utf-8")
+            graph = {
+                "nodes": [{"id": "document:old", "type": "document", "label": "old.md", "path": "knowledge/old.md", "metadata": {}}],
+                "edges": [],
+            }
+            with patch.object(graph_mod, "PROJECT_ROOT", root):
+                result = graph_mod.expand_graph_evidence("old", graph=graph)
+
+        self.assertIn("Useful persisted source context.", result["evidence"][0]["summary"])
 
     def test_save_graph_is_deterministic_json(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -99,6 +150,23 @@ class GraphIndexTests(unittest.TestCase):
 
         self.assertEqual(first, second)
         self.assertTrue(first.endswith("\n"))
+
+    def test_graph_summary_exposes_bounded_node_and_edge_samples(self) -> None:
+        summary = graph_mod.graph_summary(
+            {
+                "schema_version": 1,
+                "sources": {},
+                "nodes": [
+                    {"id": "workspace:agents", "type": "workspace_file", "label": "AGENTS.md", "path": "backend/workspace/AGENTS.md"},
+                    {"id": "concept:memory", "type": "concept", "label": "memory"},
+                ],
+                "edges": [{"id": "edge:mentions", "source": "workspace:agents", "target": "concept:memory", "type": "mentions"}],
+            }
+        )
+
+        self.assertEqual(summary["preview_nodes"][0]["label"], "AGENTS.md")
+        self.assertEqual(summary["preview_edges"][0]["source"]["label"], "AGENTS.md")
+        self.assertEqual(summary["preview_edges"][0]["target"]["label"], "memory")
 
     def test_missing_sources_build_empty_graph(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

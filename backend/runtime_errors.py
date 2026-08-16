@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -22,9 +23,50 @@ _RETRYABLE_CATEGORIES = {
 }
 
 
-def classify_runtime_failure(error: Exception) -> RuntimeFailure:
-    detail = str(error).strip() or error.__class__.__name__
+_SENSITIVE_VALUE_PATTERN = re.compile(
+    r"(?i)\b(api[_ -]?key)\b\s*[:=]\s*(?:\"[^\"]*\"|'[^']*'|[^\s,;}\]]+)"
+)
+_AUTHORIZATION_VALUE_PATTERN = re.compile(
+    r"(?i)\b(authorization)\b\s*[:=]\s*(?:\"[^\"]*\"|'[^']*'|[^\s,;}\]]+(?:\s+[^\s,;}\]]+)*)"
+)
+_BEARER_TOKEN_PATTERN = re.compile(r"(?i)\bbearer\s+[^\s,;}\]]+")
+_TOOL_CALL_MARKERS = ("tool_call_id", "tool call id", "tool_calls", "tool call", "function call", "arguments")
+
+
+def sanitize_error_text(value: Exception | str) -> str:
+    """Redact credentials before an error can enter traces or API responses."""
+    text = str(value).strip() or value.__class__.__name__
+    text = _AUTHORIZATION_VALUE_PATTERN.sub(lambda match: f"{match.group(1)}=[redacted]", text)
+    text = _BEARER_TOKEN_PATTERN.sub("Bearer [redacted]", text)
+    text = _SENSITIVE_VALUE_PATTERN.sub(r"\1=[redacted]", text)
+    return text
+
+
+def provider_tool_call_diagnostic(error: Exception) -> str | None:
+    """Return a bounded, redacted reason only for malformed provider tool calls."""
+    detail = sanitize_error_text(error)
     lowered = detail.lower()
+    has_marker = any(marker in lowered for marker in _TOOL_CALL_MARKERS)
+    is_malformed = any(marker in lowered for marker in ("missing", "empty", "invalid", "unexpected", "required"))
+    if not (has_marker and is_malformed):
+        return None
+    return detail[:800]
+
+
+def classify_runtime_failure(error: Exception) -> RuntimeFailure:
+    detail = sanitize_error_text(error)
+    lowered = detail.lower()
+
+    if provider_tool_call_diagnostic(error) is not None:
+        return RuntimeFailure(
+            category="provider_tool_call_invalid",
+            detail=detail,
+            friendly_message=(
+                "The current model or gateway did not return a standard function/tool call, "
+                "so no memory proposal was created. Use a provider that supports OpenAI-compatible tool calling."
+            ),
+            recoverable=False,
+        )
 
     if (
         "401" in lowered
@@ -119,7 +161,7 @@ def runtime_error_payload(failure: RuntimeFailure, *, trace_id: str | None = Non
     payload: dict[str, Any] = {
         "error_category": failure.category,
         "detail": failure.friendly_message,
-        "error_message": failure.detail,
+        "error_message": sanitize_error_text(failure.detail),
         "friendly_message": failure.friendly_message,
         "recoverable": failure.recoverable,
     }
@@ -131,6 +173,8 @@ def runtime_error_payload(failure: RuntimeFailure, *, trace_id: str | None = Non
 __all__ = [
     "RuntimeFailure",
     "classify_runtime_failure",
+    "provider_tool_call_diagnostic",
     "runtime_error_payload",
+    "sanitize_error_text",
     "should_retry_runtime_failure",
 ]

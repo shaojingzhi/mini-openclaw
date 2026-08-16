@@ -49,6 +49,42 @@ class RuntimeErrorClassificationTests(unittest.TestCase):
         self.assertEqual(failure.category, "max_iterations_exceeded")
         self.assertFalse(failure.recoverable)
 
+    def test_classifies_and_redacts_malformed_provider_tool_call(self) -> None:
+        error = ValueError("ToolMessage missing tool_call_id; api_key=secret-token arguments={}")
+        failure = rt_mod.classify_runtime_failure(error)
+        diagnostic = rt_mod.provider_tool_call_diagnostic(error)
+
+        self.assertEqual(failure.category, "provider_tool_call_invalid")
+        self.assertIn("no memory proposal was created", failure.friendly_message)
+        self.assertNotIn("secret-token", failure.detail)
+        self.assertIsNotNone(diagnostic)
+        self.assertNotIn("secret-token", diagnostic or "")
+        self.assertNotIn("secret-token", rt_mod.runtime_error_payload(failure)["error_message"])
+
+    def test_redacts_authorization_bearer_forms_completely(self) -> None:
+        cases = (
+            "Authorization: Bearer secret-token",
+            "authorization=Bearer secret-token",
+            "Authorization: Basic secret-token",
+            "authorization=Token secret-token",
+            'Authorization: "Basic secret-token"',
+            "Bearer secret-token",
+            "api_key='secret-token'",
+            'api_key="secret-token"',
+        )
+
+        for raw in cases:
+            with self.subTest(raw=raw):
+                self.assertNotIn("secret-token", rt_mod.sanitize_error_text(raw))
+                failure = rt_mod.classify_runtime_failure(ValueError(raw))
+                self.assertNotIn("secret-token", failure.detail)
+                self.assertNotIn("secret-token", rt_mod.runtime_error_payload(failure)["error_message"])
+
+        self.assertEqual(
+            rt_mod.sanitize_error_text("Authorization: Bearer secret-token"),
+            "Authorization=[redacted]",
+        )
+
     def test_retries_only_retryable_categories_before_output(self) -> None:
         failure = rt_mod.classify_runtime_failure(TimeoutError("tool timeout"))
         self.assertTrue(rt_mod.should_retry_runtime_failure(failure, retry_count=0, streamed_output_started=False))

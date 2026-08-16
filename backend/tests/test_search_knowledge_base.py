@@ -71,7 +71,7 @@ class SearchKnowledgeBaseSeededTests(unittest.TestCase):
             return_value={
                 "available": True,
                 "direct_node_ids": ["document:direct"],
-                "expanded_node_ids": ["skill:expanded"],
+                "expanded_node_ids": ["skill:expanded", "concept:structure"],
                 "edge_types": ["mentions", "uses_tool"],
                 "evidence": [
                     {
@@ -86,9 +86,20 @@ class SearchKnowledgeBaseSeededTests(unittest.TestCase):
                         "type": "skill",
                         "label": "resume_story_coach",
                         "path": "backend/skills/resume_story_coach/SKILL.md",
+                        "summary": "The skill turns validated project evidence into a concise interview story.",
+                        "metadata": {},
+                    },
+                    {
+                        "id": "concept:structure",
+                        "type": "concept",
+                        "label": "interview",
                         "metadata": {},
                     },
                 ],
+                "expansion_paths": {
+                    "skill:expanded": {"from_node_id": "document:direct", "from_title": "notes.md", "edge_type": "uses_tool"},
+                    "concept:structure": {"from_node_id": "document:direct", "from_title": "notes.md", "edge_type": "mentions"},
+                },
             },
         )
         self._k.start()
@@ -118,6 +129,9 @@ class SearchKnowledgeBaseSeededTests(unittest.TestCase):
         self.assertIn("Marshmallow Recipe", out)
         self.assertIn("Graph-expanded evidence:", out)
         self.assertIn("resume_story_coach", out)
+        self.assertIn("The skill turns validated project evidence", out)
+        self.assertIn("from notes.md via uses_tool", out)
+        self.assertIn("结构线索", out)
         self.assertIn("Traversed edge types: mentions, uses_tool", out)
 
     def test_graph_mode_reports_missing_graph(self) -> None:

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
+  Bot,
   FileCode2,
   FileText,
   FolderTree,
@@ -19,9 +20,15 @@ import {
 import { Toaster, toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
+import { MemoryApprovalCard } from "@/components/chat/memory-approval-card";
 import { Input } from "@/components/ui/input";
+import { defaultModelSettings, loadModelSettings, saveModelSettings, shouldPersistModelSettings, type ModelSettings } from "@/lib/model-settings";
 import {
   getFile,
+  listAgents,
+  approveMemoryProposal,
+  listMemoryProposals,
+  rejectMemoryProposal,
   getEvalJob,
   getGraphSummary,
   getTrace,
@@ -30,8 +37,9 @@ import {
   runGraphDemo,
   saveFile,
   type GraphSummary,
+  type AgentProfile,
   type EvalJobResponse,
-  type ModelSettings,
+  type MemoryProposal,
   type TraceDetail,
   type TraceSummary,
 } from "@/lib/api";
@@ -40,9 +48,9 @@ const MonacoEditor = dynamic(() => import("@/components/monaco-markdown-editor")
   ssr: false,
 });
 
-type ToolView = "workspace" | "memory" | "skills" | "examples";
+type ToolView = "workspace" | "memory" | "skills" | "personas" | "examples";
 type MainTab = "files" | "traces" | "settings";
-type InspectorGroup = "workspace" | "memory" | "skills";
+type InspectorGroup = "workspace" | "memory" | "skills" | "personas";
 type TraceStatus = "idle" | "loading" | "ready" | "error";
 type LayoutSizeKey = "sidebarWidth" | "contentWidth" | "inspectorListWidth" | "tracesListWidth";
 type LayoutSizes = Record<LayoutSizeKey, number>;
@@ -57,6 +65,7 @@ const toolViews: Array<{ id: ToolView; label: string; icon: typeof FolderTree }>
   { id: "workspace", label: "Workspace", icon: FolderTree },
   { id: "memory", label: "Memory", icon: History },
   { id: "skills", label: "Skills", icon: Sparkles },
+  { id: "personas", label: "Agent Personas", icon: Bot },
   { id: "examples", label: "Examples", icon: FileText },
 ];
 
@@ -66,14 +75,29 @@ const mainTabs: Array<{ id: MainTab; label: string; icon: typeof FolderTree }> =
   { id: "settings", label: "Settings", icon: Settings2 },
 ];
 
+const memoryProjectionFiles: InspectorFile[] = [
+  { label: "Shared / USER.md", path: "backend/memory/approved_memory/USER.md", group: "memory" },
+  { label: "Shared / PROJECT.md", path: "backend/memory/approved_memory/PROJECT.md", group: "memory" },
+  { label: "灯塔 / AGENT.md", path: "backend/memory/approved_memory/agents/lighthouse/AGENT.md", group: "memory" },
+  { label: "灯塔 / RELATIONSHIP.md", path: "backend/memory/approved_memory/agents/lighthouse/RELATIONSHIP.md", group: "memory" },
+  { label: "火花 / AGENT.md", path: "backend/memory/approved_memory/agents/spark/AGENT.md", group: "memory" },
+  { label: "火花 / RELATIONSHIP.md", path: "backend/memory/approved_memory/agents/spark/RELATIONSHIP.md", group: "memory" },
+  { label: "砥石 / AGENT.md", path: "backend/memory/approved_memory/agents/whetstone/AGENT.md", group: "memory" },
+  { label: "砥石 / RELATIONSHIP.md", path: "backend/memory/approved_memory/agents/whetstone/RELATIONSHIP.md", group: "memory" },
+];
+
 const inspectorFiles: InspectorFile[] = [
-  { label: "MEMORY.md", path: "backend/memory/MEMORY.md", group: "memory" },
+  { label: "MEMORY.md (template)", path: "backend/memory/MEMORY.md", group: "memory" },
+  ...memoryProjectionFiles,
   { label: "SOUL.md", path: "backend/workspace/SOUL.md", group: "workspace" },
   { label: "IDENTITY.md", path: "backend/workspace/IDENTITY.md", group: "workspace" },
   { label: "USER.md", path: "backend/workspace/USER.md", group: "workspace" },
   { label: "AGENTS.md", path: "backend/workspace/AGENTS.md", group: "workspace" },
   { label: "SKILLS_SNAPSHOT.md", path: "backend/workspace/SKILLS_SNAPSHOT.md", group: "workspace" },
   { label: "INTERVIEW_DEMO.md", path: "backend/workspace/INTERVIEW_DEMO.md", group: "workspace" },
+  { label: "灯塔 / lighthouse.md", path: "backend/agents/personas/lighthouse.md", group: "personas" },
+  { label: "火花 / spark.md", path: "backend/agents/personas/spark.md", group: "personas" },
+  { label: "砥石 / whetstone.md", path: "backend/agents/personas/whetstone.md", group: "personas" },
   { label: "get_weather / SKILL.md", path: "backend/skills/get_weather/SKILL.md", group: "skills" },
   { label: "interview_answer_builder / SKILL.md", path: "backend/skills/interview_answer_builder/SKILL.md", group: "skills" },
   { label: "resume_story_coach / SKILL.md", path: "backend/skills/resume_story_coach/SKILL.md", group: "skills" },
@@ -91,13 +115,7 @@ const interviewDemoPrompts = [
 const graphRagDemoPrompt =
   "Use search_knowledge_base with use_graph=true to connect Mini-OpenClaw's eval notes, interview demo pack, skills, and runtime diagnostics. Explain what the graph-expanded evidence adds beyond direct matches, and keep the answer honest: this is graph-assisted retrieval, not full community-summarization GraphRAG.";
 
-const MODEL_SETTINGS_STORAGE_KEY = "mini-openclaw-model-settings";
 const LAYOUT_SIZES_STORAGE_KEY = "mini-openclaw-layout-sizes";
-const defaultModelSettings: ModelSettings = {
-  apiKey: "",
-  baseUrl: "https://api.codexzh.com/v1",
-  model: "gpt-5.4",
-};
 const defaultLayoutSizes: LayoutSizes = {
   sidebarWidth: 320,
   contentWidth: 1120,
@@ -125,6 +143,10 @@ function getInspectorGroupLabel(group: InspectorGroup): string {
 
   if (group === "memory") {
     return "Memory";
+  }
+
+  if (group === "personas") {
+    return "Agent Personas";
   }
 
   return "Skills";
@@ -162,18 +184,24 @@ export function WorkbenchPage() {
   const [graphStatus, setGraphStatus] = useState<TraceStatus>("idle");
   const [selectedInspectorPath, setSelectedInspectorPath] = useState<string>(inspectorFiles[0]?.path ?? "");
   const [editorValue, setEditorValue] = useState("");
+  const [loadedEditorValue, setLoadedEditorValue] = useState("");
   const [loadedFilePath, setLoadedFilePath] = useState("");
   const [isInspectorLoading, setIsInspectorLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [inspectorError, setInspectorError] = useState<string | null>(null);
   const [modelSettings, setModelSettings] = useState<ModelSettings>(defaultModelSettings);
+  const [isModelSettingsHydrated, setIsModelSettingsHydrated] = useState(false);
+  const [agentProfiles, setAgentProfiles] = useState<AgentProfile[]>([]);
+  const [selectedPersonaId, setSelectedPersonaId] = useState<"lighthouse" | "spark" | "whetstone">("lighthouse");
+  const [pendingMemoryProposals, setPendingMemoryProposals] = useState<MemoryProposal[]>([]);
+  const [isMemoryReviewOpen, setIsMemoryReviewOpen] = useState(false);
+  const [isReviewingMemoryProposal, setIsReviewingMemoryProposal] = useState(false);
   const [settingsSavedAt, setSettingsSavedAt] = useState<string | null>(null);
   const [isRunningGraphDemo, setIsRunningGraphDemo] = useState(false);
   const [isRunningEval, setIsRunningEval] = useState(false);
   const [activeEvalJobId, setActiveEvalJobId] = useState<string | null>(null);
   const [evalJob, setEvalJob] = useState<EvalJobResponse | null>(null);
   const [activeResizeKey, setActiveResizeKey] = useState<LayoutSizeKey | null>(null);
-  const initialInspectorLoad = useRef(false);
   const dragStateRef = useRef<{
     key: LayoutSizeKey;
     min: number;
@@ -210,30 +238,54 @@ export function WorkbenchPage() {
     }
   }
 
+  async function refreshPendingMemoryProposals() {
+    try {
+      setPendingMemoryProposals(await listMemoryProposals("pending"));
+    } catch {
+      setPendingMemoryProposals([]);
+    }
+  }
+
+  async function handleMemoryProposalDecision(decision: "approve" | "reject") {
+    const proposal = pendingMemoryProposals[0];
+    if (!proposal || isReviewingMemoryProposal) {
+      return;
+    }
+
+    setIsReviewingMemoryProposal(true);
+    try {
+      if (decision === "approve") {
+        await approveMemoryProposal(proposal.proposal_id);
+      } else {
+        await rejectMemoryProposal(proposal.proposal_id);
+      }
+      const remaining = await listMemoryProposals("pending");
+      setPendingMemoryProposals(remaining);
+      setIsMemoryReviewOpen(remaining.length > 0);
+      toast.success(decision === "approve" ? "Memory approved" : "Memory rejected");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Memory review failed";
+      toast.error("Memory review failed", { description: message });
+    } finally {
+      setIsReviewingMemoryProposal(false);
+    }
+  }
+
   useEffect(() => {
     if (typeof window === "undefined") {
       return;
     }
 
-    const raw = window.localStorage.getItem(MODEL_SETTINGS_STORAGE_KEY);
-    if (!raw) {
-      return;
-    }
-
-    try {
-      const parsed = JSON.parse(raw) as Partial<ModelSettings>;
-      setModelSettings({
-        apiKey: typeof parsed.apiKey === "string" ? parsed.apiKey : defaultModelSettings.apiKey,
-        baseUrl: typeof parsed.baseUrl === "string" && parsed.baseUrl.trim() ? parsed.baseUrl : defaultModelSettings.baseUrl,
-        model: typeof parsed.model === "string" && parsed.model.trim() ? parsed.model : defaultModelSettings.model,
-      });
-    } catch {
-      window.localStorage.removeItem(MODEL_SETTINGS_STORAGE_KEY);
-    }
+    setModelSettings(loadModelSettings());
+    setIsModelSettingsHydrated(true);
   }, []);
 
   useEffect(() => {
-    if (typeof window === "undefined") {
+    void listAgents().then(setAgentProfiles).catch(() => setAgentProfiles([]));
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !shouldPersistModelSettings(isModelSettingsHydrated)) {
       return;
     }
 
@@ -254,9 +306,9 @@ export function WorkbenchPage() {
       return;
     }
 
-    window.localStorage.setItem(MODEL_SETTINGS_STORAGE_KEY, JSON.stringify(modelSettings));
+    saveModelSettings(modelSettings);
     setSettingsSavedAt(new Date().toLocaleTimeString());
-  }, [modelSettings]);
+  }, [isModelSettingsHydrated, modelSettings]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -318,6 +370,7 @@ export function WorkbenchPage() {
         }
 
         setEditorValue(payload.content);
+        setLoadedEditorValue(payload.content);
         setLoadedFilePath(payload.path);
       })
       .catch((error) => {
@@ -332,7 +385,6 @@ export function WorkbenchPage() {
       .finally(() => {
         if (mounted) {
           setIsInspectorLoading(false);
-          initialInspectorLoad.current = true;
         }
       });
 
@@ -343,13 +395,19 @@ export function WorkbenchPage() {
 
   useEffect(() => {
     if (activeView === "memory") {
-      setSelectedInspectorPath("backend/memory/MEMORY.md");
+      setSelectedInspectorPath("backend/memory/approved_memory/USER.md");
       setActiveTab("files");
       return;
     }
 
     if (activeView === "skills") {
       setSelectedInspectorPath("backend/skills/get_weather/SKILL.md");
+      setActiveTab("files");
+      return;
+    }
+
+    if (activeView === "personas") {
+      setSelectedInspectorPath(`backend/agents/personas/${selectedPersonaId}.md`);
       setActiveTab("files");
       return;
     }
@@ -366,6 +424,7 @@ export function WorkbenchPage() {
   useEffect(() => {
     void refreshTraces();
     void refreshGraphSummary();
+    void refreshPendingMemoryProposals();
   }, []);
 
   useEffect(() => {
@@ -469,7 +528,8 @@ export function WorkbenchPage() {
 
   const selectedInspectorFile = inspectorFiles.find((item) => item.path === selectedInspectorPath) ?? null;
   const selectedInspectorLabel = selectedInspectorFile?.label ?? selectedInspectorPath;
-  const isDirty = initialInspectorLoad.current && loadedFilePath === selectedInspectorPath && editorValue !== "";
+  const isGeneratedMemoryProjection = selectedInspectorPath.includes("/approved_memory/");
+  const isDirty = loadedFilePath === selectedInspectorPath && editorValue !== loadedEditorValue;
   const visibleInspectorGroups = useMemo<InspectorGroup[]>(() => {
     if (activeView === "memory") {
       return ["memory"];
@@ -479,7 +539,11 @@ export function WorkbenchPage() {
       return ["skills"];
     }
 
-    return ["workspace", "memory", "skills"];
+    if (activeView === "personas") {
+      return ["personas"];
+    }
+
+    return ["workspace", "memory", "skills", "personas"];
   }, [activeView]);
   const groupedInspectorFiles = useMemo(
     () =>
@@ -494,9 +558,17 @@ export function WorkbenchPage() {
       ? "Review and update the long-term memory files here."
       : activeView === "skills"
         ? "Inspect the local skill definitions without mixing them into the main chat flow."
+        : activeView === "personas"
+          ? "Versioned persona prompts are active-agent sources, separate from shared constraints and approved private memory."
         : "Inspect and edit workspace prompts, memory files, and local skills from one place.";
   const selectedInspectorGroup = selectedInspectorFile?.group ?? "workspace";
   const activeTrace = activeTraceId ? traceDetails[activeTraceId] ?? null : null;
+  const displayedExpandedEvidenceCount = activeTrace?.graph_retrieval?.evidence_chain?.filter((item) => item.origin === "expanded").length ?? 0;
+  const routePayload = activeTrace?.events.find((event) => event.kind === "agent_routed")?.payload;
+  const handoffPayload = activeTrace?.events.find((event) => event.kind === "handoff_requested")?.payload;
+  const bootstrapRecords = activeTrace?.events
+    .filter((event) => event.kind === "memory_loaded")
+    .flatMap((event) => Array.isArray(event.payload.records) ? event.payload.records.filter((record): record is Record<string, unknown> => Boolean(record) && typeof record === "object") : []) ?? [];
   const isInspectorCompact = layoutSizes.contentWidth < 860;
   const isTracesCompact = layoutSizes.contentWidth < 900;
 
@@ -575,7 +647,12 @@ export function WorkbenchPage() {
   }
 
   async function handleSaveInspector() {
-    if (!selectedInspectorPath || isSaving) {
+    if (!selectedInspectorPath || isSaving || isGeneratedMemoryProjection) {
+      if (isGeneratedMemoryProjection) {
+        toast.info("Memory projections are read-only", {
+          description: "Approve or reject a memory proposal to update this projection.",
+        });
+      }
       return;
     }
 
@@ -585,6 +662,7 @@ export function WorkbenchPage() {
     try {
       const payload = await saveFile(selectedInspectorPath, editorValue);
       setEditorValue(payload.content);
+      setLoadedEditorValue(payload.content);
       setLoadedFilePath(payload.path);
       toast.success("Saved file", { description: payload.path });
     } catch (error) {
@@ -623,7 +701,7 @@ export function WorkbenchPage() {
       return;
     }
 
-    window.localStorage.setItem(MODEL_SETTINGS_STORAGE_KEY, JSON.stringify(modelSettings));
+    saveModelSettings(modelSettings);
     const timestamp = new Date().toLocaleTimeString();
     setSettingsSavedAt(timestamp);
     toast.success("Saved model settings", {
@@ -634,22 +712,22 @@ export function WorkbenchPage() {
   return (
     <>
       <Toaster position="top-right" richColors />
-      <main className="min-h-screen bg-[linear-gradient(180deg,#f8fafc_0%,#eef2ff_100%)] px-4 py-4 text-foreground sm:px-5 sm:py-5">
+      <main className="min-h-screen px-4 py-4 text-foreground sm:px-5 sm:py-5">
         <div className="mx-auto flex w-full max-w-[1800px] flex-col gap-4">
-          <header className="rounded-[24px] border border-white/70 bg-white/80 px-5 py-5 shadow-[0_16px_40px_rgba(15,23,42,0.08)] backdrop-blur sm:px-6">
+          <header className="rounded-[24px] border border-[#ead9c5] bg-[#fffaf4]/90 px-5 py-5 shadow-[0_16px_40px_rgba(90,59,46,0.10)] backdrop-blur sm:px-6">
             <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
               <div className="max-w-3xl">
-                <div className="inline-flex items-center gap-2 rounded-full border border-sky-200 bg-sky-50 px-3 py-1 text-xs font-semibold uppercase tracking-[0.22em] text-sky-700">
+                <div className="inline-flex items-center gap-2 rounded-full border border-[#e7c4ad] bg-[#fff1e6] px-3 py-1 text-xs font-semibold uppercase tracking-[0.22em] text-[#a34f32]">
                   <Sparkles className="h-3.5 w-3.5" />
                   Workbench
                 </div>
-                <h1 className="mt-3 text-2xl font-semibold tracking-tight text-slate-950 sm:text-3xl">Open the developer-facing tools only when you need them.</h1>
-                <p className="mt-2 text-sm leading-6 text-slate-600 sm:text-base">
-                  Keep chat simple on the home page. Use the Workbench for prompt files, traces, request settings, and the richer demo and diagnostics flows.
+                <h1 className="mt-3 text-2xl font-semibold tracking-tight text-[#34231d] sm:text-3xl">Memory Harbor 的观察台，只在需要证据时打开。</h1>
+                <p className="mt-2 text-sm leading-6 text-stone-600 sm:text-base">
+                  这里保留记忆文件、运行 trace、图检索与评测；主对话仍专注于人与三位 Agent 的协作。
                 </p>
               </div>
               <Link href="/">
-                <Button className="h-11 rounded-2xl px-4" type="button" variant="outline">
+                <Button className="h-11 rounded-2xl border-[#ddc3ac] bg-white px-4 text-[#5a3b2e] hover:bg-[#fff1e6]" type="button" variant="outline">
                   <ArrowLeft className="mr-2 h-4 w-4" />
                   Back to Chat
                 </Button>
@@ -659,7 +737,7 @@ export function WorkbenchPage() {
 
           <section className="flex min-h-[calc(100vh-2rem)] flex-col gap-4 xl:flex-row xl:items-start">
             <aside
-              className="flex shrink-0 flex-col overflow-y-auto rounded-[22px] border border-slate-800/80 bg-[linear-gradient(180deg,rgba(15,23,42,0.98),rgba(15,23,42,0.92))] p-5 shadow-[0_18px_50px_rgba(15,23,42,0.22)] xl:sticky xl:top-4 xl:max-h-[calc(100vh-2.5rem)]"
+              className="flex min-h-0 shrink-0 flex-col overflow-y-auto rounded-[22px] border border-[#5a3b2e] bg-[linear-gradient(180deg,#5a3b2e,#432a20)] p-5 shadow-[0_18px_50px_rgba(90,59,46,0.22)] xl:sticky xl:top-4 xl:max-h-[calc(100vh-2.5rem)]"
               style={{ width: `min(100%, ${layoutSizes.sidebarWidth}px)` }}
             >
               <div className="border-b border-white/10 pb-4">
@@ -707,7 +785,7 @@ export function WorkbenchPage() {
                     {isRunningEval ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <FileCode2 className="mr-2 h-4 w-4" />}
                     Run Eval
                   </Button>
-                  <Button className="h-10 w-full justify-start rounded-xl bg-sky-600 text-white hover:bg-sky-700" disabled={isRunningGraphDemo} onClick={handleRunGraphDemo} type="button">
+                  <Button className="h-10 w-full justify-start rounded-xl bg-[#c96f4a] text-white hover:bg-[#ad5938]" disabled={isRunningGraphDemo} onClick={handleRunGraphDemo} type="button">
                     {isRunningGraphDemo ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <History className="mr-2 h-4 w-4" />}
                     Run Graph RAG trace
                   </Button>
@@ -752,15 +830,15 @@ export function WorkbenchPage() {
             </div>
 
             <section
-              className="flex min-h-[72vh] min-w-0 flex-1 flex-col rounded-[22px] border border-slate-200/80 bg-[#f6f8fc] p-4 shadow-[0_12px_34px_rgba(15,23,42,0.05)] sm:p-5 xl:sticky xl:top-4 xl:max-h-[calc(100vh-2.5rem)] xl:overflow-y-auto xl:overscroll-contain"
+              className="flex min-h-[72vh] min-w-0 flex-col rounded-[22px] border border-[#ead9c5] bg-[#f8eee1]/75 p-4 shadow-[0_12px_34px_rgba(90,59,46,0.07)] sm:p-5"
               style={{ width: `min(100%, ${layoutSizes.contentWidth}px)` }}
             >
-              <div className="flex items-start justify-between gap-4 border-b border-slate-200/80 pb-5">
+              <div className="flex items-start justify-between gap-4 border-b border-[#ead9c5] pb-5">
                 <div>
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-400">Workbench Surface</p>
-                  <h2 className="mt-3 text-2xl font-semibold tracking-tight text-slate-950">One advanced panel at a time</h2>
-                  <p className="mt-2 text-sm leading-6 text-slate-500">
-                    Switch between files, traces, and settings without stacking everything on one screen.
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-[#a77760]">Evidence Surface</p>
+                  <h2 className="mt-3 text-2xl font-semibold tracking-tight text-[#34231d]">一次只看一类证据</h2>
+                  <p className="mt-2 text-sm leading-6 text-stone-500">
+                    在文件、trace 和设置之间切换，不把诊断信息塞回主对话。
                   </p>
                 </div>
                 <div className="flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-500">
@@ -838,6 +916,32 @@ export function WorkbenchPage() {
                         <p className="mt-1 text-slate-900">{graphSummary?.edge_count ?? 0}</p>
                       </div>
                     </div>
+                    {(graphSummary?.preview_nodes?.length || graphSummary?.preview_edges?.length) ? (
+                      <div className="mt-4 grid gap-3 lg:grid-cols-2">
+                        <div className="rounded-xl border border-sky-200 bg-white/75 p-3">
+                          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-700">真实节点样本</p>
+                          <div className="mt-2 space-y-2">
+                            {graphSummary?.preview_nodes?.map((node) => (
+                              <div className="rounded-lg border border-sky-100 bg-white px-2.5 py-2" key={node.id}>
+                                <p className="text-xs font-semibold text-slate-800">{node.label}</p>
+                                <p className="mt-0.5 break-words text-[11px] text-slate-500">{node.type}{node.path ? ` · ${node.path}` : ""}</p>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                        <div className="rounded-xl border border-sky-200 bg-white/75 p-3">
+                          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-700">真实连边样本</p>
+                          <div className="mt-2 space-y-2">
+                            {graphSummary?.preview_edges?.map((edge) => (
+                              <div className="rounded-lg border border-sky-100 bg-white px-2.5 py-2 text-[11px] text-slate-600" key={edge.id}>
+                                <p className="break-words font-medium text-slate-800">{edge.source.label} <span className="text-sky-700">--{edge.type}--&gt;</span> {edge.target.label}</p>
+                                <p className="mt-0.5 text-slate-500">{edge.source.type} → {edge.target.type}</p>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    ) : null}
                   </div>
                   <div className="mt-4 grid gap-2">
                     {interviewDemoPrompts.map((prompt) => (
@@ -849,8 +953,87 @@ export function WorkbenchPage() {
                 </section>
               ) : null}
 
+              {activeView === "personas" ? (
+                <section className="mt-5 rounded-[18px] border border-[#e6c9b2] bg-[#fffaf4] p-4 shadow-sm">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-[#a77760]">Agent Personas</p>
+                  <h3 className="mt-2 text-base font-semibold text-[#34231d]">人格来源与记忆边界</h3>
+                  <p className="mt-1 text-sm leading-6 text-stone-600">人格来自版本化 Markdown，并只在当前运行 Agent 的 Prompt 中加载。共享 SOUL.md / IDENTITY.md 是基础约束；批准后的私有记忆位于 <code>approved_memory/agents/&#123;agent_id&#125;/</code>，不属于人格。</p>
+                  <div className="mt-4 grid gap-3 md:grid-cols-3">
+                    {agentProfiles.map((profile) => {
+                      const selected = profile.agent_id === selectedPersonaId;
+                      return (
+                        <button
+                          key={profile.agent_id}
+                          className={["rounded-2xl border p-4 text-left transition", selected ? "border-[#c96f4a] bg-[#fff1e6] shadow-sm" : "border-[#ead9c5] bg-white hover:border-[#d9b89d]"].join(" ")}
+                          onClick={() => {
+                            setSelectedPersonaId(profile.agent_id);
+                            setSelectedInspectorPath(profile.persona_path ?? `backend/agents/personas/${profile.agent_id}.md`);
+                          }}
+                          type="button"
+                        >
+                          <p className="font-semibold text-[#5a3b2e]">{profile.display_name} <span className="text-xs font-medium text-stone-400">{profile.english_name}</span></p>
+                          <p className="mt-2 text-xs leading-5 text-stone-600">职责：{profile.community_role}</p>
+                          <p className="mt-1 text-xs leading-5 text-stone-500">认知重点：{profile.cognitive_focus}</p>
+                          <p className="mt-2 text-[11px] text-stone-400">可 handoff 至：{profile.allowed_handoff_targets.length ? profile.allowed_handoff_targets.join("、") : "无"}</p>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {agentProfiles.length === 0 ? <p className="mt-3 text-sm text-rose-700">Agent profile metadata is unavailable; the persona files can still be inspected below.</p> : null}
+                </section>
+              ) : null}
+
+              {activeView === "memory" ? (
+                <section className="mt-5 rounded-[18px] border border-emerald-200 bg-emerald-50/70 p-4 shadow-sm">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-emerald-700">Memory projections</p>
+                  <h3 className="mt-2 text-base font-semibold text-emerald-950">按 Agent 查看已批准记忆</h3>
+                  <p className="mt-1 text-sm leading-6 text-emerald-900/75">共享记忆对所有 Agent 可见；私有记忆只会在对应 Agent 的新 Session Bootstrap 中注入。投影文件由审批结果生成，因此只读。</p>
+                  <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                    {[
+                      { label: "共享记忆", detail: "USER.md · PROJECT.md", path: "backend/memory/approved_memory/USER.md" },
+                      { label: "灯塔", detail: "只看灯塔私有投影", path: "backend/memory/approved_memory/agents/lighthouse/RELATIONSHIP.md" },
+                      { label: "火花", detail: "只看火花私有投影", path: "backend/memory/approved_memory/agents/spark/RELATIONSHIP.md" },
+                      { label: "砥石", detail: "只看砥石私有投影", path: "backend/memory/approved_memory/agents/whetstone/RELATIONSHIP.md" },
+                    ].map((projection) => (
+                      <button
+                        key={projection.label}
+                        className={[
+                          "rounded-xl border px-3 py-3 text-left transition",
+                          selectedInspectorPath === projection.path
+                            ? "border-emerald-700 bg-emerald-700 text-white shadow-sm"
+                            : "border-emerald-200 bg-white/80 text-emerald-950 hover:border-emerald-400 hover:bg-white",
+                        ].join(" ")}
+                        onClick={() => setSelectedInspectorPath(projection.path)}
+                        type="button"
+                      >
+                        <p className="text-sm font-semibold">{projection.label}</p>
+                        <p className={["mt-1 text-xs", selectedInspectorPath === projection.path ? "text-white/75" : "text-emerald-800/75"].join(" ")}>{projection.detail}</p>
+                      </button>
+                    ))}
+                  </div>
+                  <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50/80 p-3">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-semibold text-amber-950">待审批记忆</p>
+                        <p className="mt-1 text-xs leading-5 text-amber-900/75">
+                          {pendingMemoryProposals.length > 0
+                            ? `${pendingMemoryProposals.length} 条提案尚未进入长期记忆。`
+                            : "当前没有待审批提案。"}
+                        </p>
+                      </div>
+                      {pendingMemoryProposals.length > 0 ? (
+                        <Button className="rounded-xl bg-amber-600 text-white hover:bg-amber-700" onClick={() => setIsMemoryReviewOpen(true)} type="button">
+                          Review {pendingMemoryProposals.length}
+                        </Button>
+                      ) : null}
+                    </div>
+                    {pendingMemoryProposals[0] ? <p className="mt-3 line-clamp-2 text-xs leading-5 text-amber-950">下一条：{pendingMemoryProposals[0].content}</p> : null}
+                  </div>
+                </section>
+              ) : null}
+
               {activeTab === "files" ? (
-                <section className="mt-5 flex min-h-0 flex-1 flex-col overflow-hidden rounded-[18px] border border-slate-200 bg-white shadow-sm">
+                <section className="mt-5 flex min-h-[760px] flex-col overflow-hidden rounded-[18px] border border-slate-200 bg-white shadow-sm">
                   <div className="border-b border-slate-200 px-4 py-3">
                     <div className="flex items-center justify-between gap-3">
                       <div>
@@ -870,11 +1053,11 @@ export function WorkbenchPage() {
                     </div>
                   </div>
 
-                  <div className={["flex min-h-0 flex-1 gap-4 overflow-hidden p-4", isInspectorCompact ? "flex-col" : "flex-row"].join(" ")}>
+                  <div className={["flex min-h-[660px] flex-1 gap-4 overflow-hidden p-4", isInspectorCompact ? "flex-col" : "flex-row"].join(" ")}>
                     <div
                       className={[
                         "flex shrink-0 flex-col rounded-[18px] border border-slate-200 bg-white p-3 shadow-sm",
-                        isInspectorCompact ? "min-h-[260px] max-h-[320px] w-full" : "min-h-[420px] w-full max-w-[360px]",
+                        isInspectorCompact ? "min-h-[260px] max-h-[320px] w-full" : "min-h-[660px] w-full max-w-[360px]",
                       ].join(" ")}
                       style={{ width: isInspectorCompact ? "100%" : `${layoutSizes.inspectorListWidth}px` }}
                     >
@@ -949,9 +1132,9 @@ export function WorkbenchPage() {
                           </div>
                           <p className="mt-1 truncate text-xs text-slate-500">{selectedInspectorPath}</p>
                         </div>
-                        <Button className="h-10 rounded-xl px-4 sm:shrink-0" disabled={isInspectorLoading || isSaving} onClick={handleSaveInspector} type="button">
+                        <Button className="h-10 rounded-xl px-4 sm:shrink-0" disabled={isInspectorLoading || isSaving || isGeneratedMemoryProjection} onClick={handleSaveInspector} type="button">
                           {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
-                          Save
+                          {isGeneratedMemoryProjection ? "Generated" : "Save"}
                         </Button>
                       </div>
 
@@ -963,14 +1146,14 @@ export function WorkbenchPage() {
                           </div>
                         ) : (
                           <div className="h-full min-h-0 min-w-0 overflow-hidden">
-                            <MonacoEditor height="100%" onChange={setEditorValue} onSave={handleSaveInspector} value={editorValue} />
+                            <MonacoEditor height="100%" onChange={setEditorValue} onSave={handleSaveInspector} readOnly={isGeneratedMemoryProjection} value={editorValue} />
                           </div>
                         )}
                       </div>
 
                       <div className="border-t border-slate-200 px-4 py-3">
                         <p className="text-sm text-slate-600">
-                          {isSaving ? "Saving changes..." : inspectorError ? `Save error: ${inspectorError}` : "Cmd/Ctrl+S saves the current file."}
+                          {isGeneratedMemoryProjection ? "Generated from approved proposals. Use memory review to change it." : isSaving ? "Saving changes..." : inspectorError ? `Save error: ${inspectorError}` : "Cmd/Ctrl+S saves the current file."}
                         </p>
                       </div>
                     </div>
@@ -1073,14 +1256,61 @@ export function WorkbenchPage() {
                               {activeTrace.retry_count > 0 ? <p className="mt-1">Retries: {activeTrace.retry_count}</p> : null}
                               {activeTrace.friendly_message ? <p className="mt-2 text-rose-700">{activeTrace.friendly_message}</p> : null}
                             </div>
+                            {routePayload ? (
+                              <div className="rounded-2xl border border-[#e6c9b2] bg-[#fffaf4] p-4 text-sm text-stone-700">
+                                <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-[#a77760]">路由与上下文</p>
+                                <p className="mt-2">路由方式：{String(routePayload.route_reason ?? "历史记录未保存该字段")}</p>
+                                <p className="mt-1">当前 Agent：{String(routePayload.display_name ?? routePayload.agent_id ?? "历史记录未保存该字段")}</p>
+                                {handoffPayload ? (
+                                  <>
+                                    <p className="mt-2 font-medium">交接：{String(handoffPayload.from_agent_id ?? "?")} → {String(handoffPayload.to_agent_id ?? "?")}</p>
+                                    <p className="mt-1">任务：{String(handoffPayload.task ?? "历史记录未保存该字段")}</p>
+                                    <p className="mt-1">原因：{String(handoffPayload.reason ?? "历史记录未保存该字段")}</p>
+                                    <p className="mt-1 font-mono text-xs text-stone-500">{String(handoffPayload.handoff_id ?? "历史记录未保存该字段")}</p>
+                                    <p className="mt-1">共享证据：{String(handoffPayload.evidence_count ?? "历史记录未保存该字段")} 条</p>
+                                    {Array.isArray(handoffPayload.evidence) ? (
+                                      <div className="mt-3 space-y-2">
+                                        {handoffPayload.evidence.map((evidence, index) => {
+                                          const item = evidence as Record<string, unknown>;
+                                          return <div key={`${activeTrace.trace_id}-evidence-${index}`} className="rounded-xl border border-[#ead9c5] bg-white px-3 py-2 text-xs"><p className="font-semibold text-[#5a3b2e]">{String(item.tool_name ?? "工具来源未知")} · {String(item.title ?? item.path ?? "无标题")}</p><p className="mt-1 text-stone-600">{String(item.summary ?? item.content ?? "历史记录未保存摘要")}</p><p className="mt-1 text-stone-400">Provenance：{String(item.provenance ?? "历史记录未保存该字段")}</p></div>;
+                                        })}
+                                      </div>
+                                    ) : null}
+                                  </>
+                                ) : routePayload.route_reason === "explicit_mention" ? (
+                                  <><p className="mt-2">共享证据：无</p><p className="mt-1">原因：本次为直接路由，未发生 handoff，也未发生证据共享。</p></>
+                                ) : <p className="mt-2">本次由默认主持 Agent 接手；历史记录未显示 handoff。</p>}
+                              </div>
+                            ) : null}
+                            {bootstrapRecords.length > 0 ? (
+                              <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-4 text-sm text-emerald-950">
+                                <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-emerald-700">本次 Bootstrap 加载</p>
+                                <p className="mt-2 text-xs text-emerald-800">仅展示访问控制清单，不展示记忆正文。Shared 与 Current Agent Private 是两个分组。</p>
+                                <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                                  {["shared", "agent_private"].map((visibility) => <div key={visibility} className="rounded-xl border border-emerald-100 bg-white/80 p-3"><p className="text-xs font-semibold">{visibility === "shared" ? "Shared" : "Current Agent Private"}</p>{bootstrapRecords.filter((record) => record.visibility === visibility).map((record) => <p key={String(record.proposal_id)} className="mt-2 break-words text-xs text-emerald-900">{String(record.proposal_id)} · {String(record.target)} · owner: {String(record.owner_agent_id ?? "shared")} · {String(record.scope)}</p>) || null}</div>)}
+                                </div>
+                              </div>
+                            ) : null}
                             {activeTrace.graph_retrieval ? (
                               <div className="rounded-2xl border border-sky-100 bg-sky-50 p-4 text-sm text-sky-950">
                                 <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-sky-500">Graph retrieval</p>
                                 <p className="mt-2 font-semibold">Graph-assisted retrieval active</p>
                                 <p className="mt-2">Evidence: {activeTrace.graph_retrieval.evidence_count}</p>
                                 <p className="mt-1">Direct nodes: {activeTrace.graph_retrieval.direct_node_ids.length}</p>
-                                <p className="mt-1">Expanded nodes: {activeTrace.graph_retrieval.expanded_node_ids.length}</p>
+                                <p className="mt-1">Expanded nodes shown: {displayedExpandedEvidenceCount}</p>
                                 <p className="mt-1">Edges: {activeTrace.graph_retrieval.edge_types.length > 0 ? activeTrace.graph_retrieval.edge_types.join(", ") : "none"}</p>
+                                <div className="mt-3 space-y-2">
+                                  {activeTrace.graph_retrieval.evidence_chain?.map((item) => (
+                                    <div key={item.id} className="rounded-xl border border-sky-100 bg-white/80 p-3 text-xs text-slate-700">
+                                      <p className="font-semibold text-slate-900">{item.origin === "direct" ? "直接命中" : "图扩展补充"} · {item.node_type}</p>
+                                      <p className="mt-1 break-words">{item.title}{item.path ? ` (${item.path})` : ""}</p>
+                                      {item.summary ? <p className="mt-1 text-slate-500">{item.summary}</p> : null}
+                                      {item.origin === "expanded" ? <p className="mt-1 text-sky-700">来自 {item.expanded_from_title ?? item.expanded_from ?? "历史记录未保存来源"}，经过 {item.edge_type ?? "历史记录未保存边类型"}</p> : null}
+                                    </div>
+                                  ))}
+                                </div>
+                                {displayedExpandedEvidenceCount === 0 ? <p className="mt-3 font-medium">本次没有可展示的扩展证据。</p> : null}
+                                {activeTrace.graph_retrieval.comparison ? <div className="mt-3 rounded-xl border border-sky-200 bg-white/70 p-3 text-xs"><p className="font-semibold">Direct vs Graph（同一 query）</p><p className="mt-1">图扩展实际展示：{displayedExpandedEvidenceCount} 条节点证据。本案例仅展示实际补充，不声明通用 Recall 提升。</p><details className="mt-2"><summary className="cursor-pointer font-medium text-sky-800">查看两组真实工具结果</summary><p className="mt-2 whitespace-pre-wrap break-words text-slate-600"><span className="font-semibold">Direct</span>{"\n"}{activeTrace.graph_retrieval.comparison.direct_result}</p><p className="mt-2 whitespace-pre-wrap break-words text-slate-600"><span className="font-semibold">Graph</span>{"\n"}{activeTrace.graph_retrieval.comparison.graph_result}</p></details></div> : null}
                               </div>
                             ) : (
                               <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-4 text-sm text-slate-500">
@@ -1110,7 +1340,7 @@ export function WorkbenchPage() {
                       <div className="max-w-[28rem]">
                         <p className="text-sm font-medium text-slate-900">Request settings</p>
                         <p className="mt-1 text-xs leading-5 text-slate-500">These fields are sent with each chat request. Leave API Key empty to use the backend default.</p>
-                        <p className="mt-2 text-xs text-slate-400">{settingsSavedAt ? `Auto-saved locally at ${settingsSavedAt}.` : "Auto-saves locally in this browser."}</p>
+                        <p className="mt-2 text-xs text-slate-400">{settingsSavedAt ? `Auto-saved locally at ${settingsSavedAt}.` : "Auto-saves locally in this browser."} Local demo configuration only; this is not production-grade key management.</p>
                       </div>
                       <div className="flex flex-wrap items-center gap-2 xl:justify-end">
                         <Button className="h-9 rounded-2xl px-3" onClick={handleSaveModelSettings} type="button">
@@ -1168,6 +1398,15 @@ export function WorkbenchPage() {
           </section>
         </div>
       </main>
+      <MemoryApprovalCard
+        isOpen={isMemoryReviewOpen}
+        isSubmitting={isReviewingMemoryProposal}
+        onApprove={() => void handleMemoryProposalDecision("approve")}
+        onClose={() => setIsMemoryReviewOpen(false)}
+        onReject={() => void handleMemoryProposalDecision("reject")}
+        pendingCount={pendingMemoryProposals.length}
+        proposal={pendingMemoryProposals[0] ?? null}
+      />
     </>
   );
 }

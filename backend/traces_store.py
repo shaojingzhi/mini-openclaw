@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from backend.runtime_errors import sanitize_error_text
+
 PROJECT_ROOT: Path = Path(__file__).resolve().parents[1]
 TRACES_DIR: Path = PROJECT_ROOT / "backend" / "data" / "traces"
 
@@ -81,7 +83,7 @@ def record_error(
     recoverable: bool,
 ) -> None:
     trace["error_category"] = category
-    trace["error_message"] = detail
+    trace["error_message"] = sanitize_error_text(detail)
     trace["friendly_message"] = friendly_message
     trace["recoverable"] = recoverable
 

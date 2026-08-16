@@ -45,6 +45,8 @@ GRAPH_UNAVAILABLE_MESSAGE: str = (
     "Graph evidence unavailable: rebuild the graph with "
     "`python -m backend.graph.index` to enable graph-assisted retrieval."
 )
+MAX_GRAPH_EVIDENCE_CHARS = 3_200
+MAX_GRAPH_EVIDENCE_SUMMARY_CHARS = 320
 
 _retriever_cache: dict[tuple[str, str], Any] = {}
 _cache_lock: Lock = Lock()
@@ -172,14 +174,39 @@ def _format_graph_evidence(query: str) -> str:
     if not evidence:
         return "Graph-expanded evidence: no related nodes found."
 
-    lines = ["Graph-expanded evidence:"]
+    direct_ids = {str(node_id) for node_id in graph_result.get("direct_node_ids", [])}
+    expansion_paths = graph_result.get("expansion_paths", {}) or {}
+    lines = [
+        "Graph-expanded evidence:",
+        "Framing: graph-assisted retrieval, not full GraphRAG.",
+    ]
     for node in evidence:
+        node_id = str(node.get("id", ""))
         path = node.get("path")
         suffix = f" — {path}" if path else ""
-        lines.append(f"- [{node['type']}] {node['label']}{suffix}")
+        if node_id in direct_ids:
+            lines.append(f"- Direct [{node['type']}] {node['label']}{suffix}")
+            continue
+
+        relation = expansion_paths.get(node_id) or {}
+        from_node = relation.get("from_title") or relation.get("from_node_id") or "unknown node"
+        edge_type = relation.get("edge_type") or "unknown edge"
+        lines.append(
+            f"- Expanded [{node['type']}] {node['label']}{suffix} "
+            f"(from {from_node} via {edge_type})"
+        )
+        summary = node.get("summary")
+        if isinstance(summary, str) and summary.strip():
+            bounded_summary = " ".join(summary.split())[:MAX_GRAPH_EVIDENCE_SUMMARY_CHARS]
+            lines.append(f"  Summary: {bounded_summary}")
+        else:
+            lines.append("  结构线索：无可展示的文本摘要。")
     if graph_result["edge_types"]:
         lines.append(f"Traversed edge types: {', '.join(graph_result['edge_types'])}")
-    return "\n".join(lines)
+    output = "\n".join(lines)
+    if len(output) <= MAX_GRAPH_EVIDENCE_CHARS:
+        return output
+    return output[:MAX_GRAPH_EVIDENCE_CHARS].rstrip() + "..."
 
 
 @tool("search_knowledge_base")
@@ -221,5 +248,7 @@ __all__ = [
     "EMPTY_KB_MESSAGE",
     "NO_RESULTS_MESSAGE",
     "GRAPH_UNAVAILABLE_MESSAGE",
+    "MAX_GRAPH_EVIDENCE_CHARS",
+    "MAX_GRAPH_EVIDENCE_SUMMARY_CHARS",
     "clear_cache",
 ]

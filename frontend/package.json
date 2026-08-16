@@ -7,7 +7,8 @@
     "build": "NEXT_DIST_DIR=.next-build next build",
     "start": "NEXT_DIST_DIR=.next-build next start",
     "lint": "next lint",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:model-settings": "node --test --experimental-strip-types src/lib/model-settings.test.ts"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",

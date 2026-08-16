@@ -28,7 +28,14 @@ from backend.evals.runner import DEFAULT_DATASET_PATH, DEFAULT_PROFILES_PATH
 from backend.graph.agent import build_agent
 from backend.graph import index as graph_index
 from backend.memory import proposals_store
-from backend.runtime_errors import classify_runtime_failure, runtime_error_payload, should_retry_runtime_failure
+from backend.tools.search_knowledge_base import search_knowledge_base
+from backend.runtime_errors import (
+    classify_runtime_failure,
+    provider_tool_call_diagnostic,
+    runtime_error_payload,
+    sanitize_error_text,
+    should_retry_runtime_failure,
+)
 from backend.settings import get_settings
 from backend.user_locks import run_with_user_lock
 from backend.user_state import DEFAULT_USER_ID, normalize_user_id, user_memory_dir, user_sessions_dir, user_workspace_dir
@@ -59,6 +66,7 @@ ALLOWED_FILE_ROOTS: tuple[Path, ...] = (
     get_settings().memory_dir,
     get_settings().workspace_dir,
     get_settings().skills_dir,
+    PROJECT_ROOT / "backend" / "agents" / "personas",
 )
 MAX_HANDOFF_EVIDENCE_ITEMS = 5
 MAX_HANDOFF_EVIDENCE_ITEM_CHARS = 1_000
@@ -106,6 +114,8 @@ class SessionMessage(BaseModel):
     handoff_id: str | None = None
     handoff_from_agent_id: str | None = None
     handoff_reason: str | None = None
+    handoff_task: str | None = None
+    handoff_evidence_count: int | None = None
 
 
 def _resolve_model_name(request: ChatRequest) -> str:
@@ -164,13 +174,23 @@ def _coerce_text(content: Any) -> str:
 
 def _session_metadata(path: Path, *, user_id: str) -> dict[str, Any]:
     stat = path.stat()
+    messages = sessions_store.load_session(path.stem, user_id=user_id)
+    preview = next(
+        (
+            " ".join(_coerce_text(message.get("content", "")).split())
+            for message in messages
+            if message.get("role") == "user" and _coerce_text(message.get("content", "")).strip()
+        ),
+        "",
+    )
     return {
         "name": path.stem,
         "last_modified": datetime.fromtimestamp(
             stat.st_mtime,
             tz=timezone.utc,
         ).isoformat(),
-        "message_count": len(sessions_store.load_session(path.stem, user_id=user_id)),
+        "message_count": len(messages),
+        "preview": preview[:120],
     }
 
 
@@ -221,11 +241,39 @@ def _record_graph_retrieval(trace: dict[str, Any], query: str) -> None:
 
 
 def _record_graph_result(trace: dict[str, Any], graph_result: dict[str, Any]) -> None:
+    direct_ids = set(graph_result.get("direct_node_ids", []))
+    expansion_paths = graph_result.get("expansion_paths", {}) or {}
+    evidence_by_id = {
+        str(node.get("id", "")): node
+        for node in graph_result.get("evidence", []) or []
+    }
+    evidence_chain = []
+    for node in graph_result.get("evidence", []) or []:
+        node_id = str(node.get("id", ""))
+        path = expansion_paths.get(node_id) or {}
+        parent = evidence_by_id.get(str(path.get("from_node_id", "")), {})
+        evidence_chain.append(
+            {
+                "id": node_id,
+                "origin": "direct" if node_id in direct_ids else "expanded",
+                "node_type": node.get("type", "node"),
+                "title": node.get("label") or node.get("path") or node_id,
+                "path": node.get("path"),
+                "summary": node.get("summary") or node.get("metadata", {}).get("summary"),
+                "expanded_from": path.get("from_node_id"),
+                "expanded_from_title": path.get("from_title") or parent.get("label") or parent.get("path"),
+                "edge_type": path.get("edge_type"),
+            }
+        )
     metadata = {
         "direct_node_ids": graph_result.get("direct_node_ids", []),
         "expanded_node_ids": graph_result.get("expanded_node_ids", []),
+        "displayed_direct_node_ids": graph_result.get("displayed_direct_node_ids", []),
+        "displayed_expanded_node_ids": graph_result.get("displayed_expanded_node_ids", []),
         "edge_types": graph_result.get("edge_types", []),
         "evidence_count": len(graph_result.get("evidence", [])),
+        "raw_evidence": graph_result.get("evidence", []),
+        "evidence_chain": evidence_chain,
     }
     trace["graph_retrieval"] = metadata
     traces_store.append_event(trace, kind="graph_retrieval", payload=metadata)
@@ -274,7 +322,7 @@ def _record_retry(trace: dict[str, Any], *, category: str, detail: str) -> None:
         kind="runtime_retry",
         payload={
             "category": category,
-            "detail": detail,
+            "detail": sanitize_error_text(detail),
             "attempt": trace["retry_count"],
         },
     )
@@ -286,6 +334,7 @@ def _agent_event_payload(profile: AgentProfile) -> dict[str, str]:
         "display_name": profile.display_name,
         "english_name": profile.english_name,
         "accent": profile.accent,
+        "persona_path": profile.persona_path,
     }
 
 
@@ -294,6 +343,7 @@ def _route_event_payload(decision: RouteDecision, profile: AgentProfile) -> dict
         **_agent_event_payload(profile),
         "route_reason": decision.route_reason,
         "matched_mention": decision.matched_mention,
+        "routing_label": "direct mention" if decision.route_reason == "explicit_mention" else "default host",
     }
 
 
@@ -309,17 +359,30 @@ def _tool_evidence(
     *,
     tool_name: str,
     content: str,
-) -> dict[str, str]:
+) -> dict[str, Any]:
     normalized_name = tool_name.strip() or "tool"
+    first_line = next((line.strip() for line in content.splitlines() if line.strip()), "")
+    path = next(
+        (
+            token.strip("()[]—:")
+            for token in first_line.replace("\t", " ").split()
+            if token.startswith(("backend/", "/"))
+        ),
+        None,
+    )
     return {
         "tool_name": normalized_name,
         "content": content.strip(),
         "visibility": "shared" if normalized_name in _SHARED_EVIDENCE_TOOLS else "agent_private",
+        "summary": " ".join(content.split())[:280],
+        "title": first_line[:160] or normalized_name,
+        "path": path,
+        "provenance": f"shared result from {normalized_name}",
     }
 
 
-def _bounded_tool_evidence(items: list[dict[str, str]]) -> list[dict[str, str]]:
-    evidence: list[dict[str, str]] = []
+def _bounded_tool_evidence(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    evidence: list[dict[str, Any]] = []
     remaining_characters = MAX_HANDOFF_EVIDENCE_TOTAL_CHARS
     for item in items:
         tool_name = item.get("tool_name", "tool").strip() or "tool"
@@ -337,6 +400,10 @@ def _bounded_tool_evidence(items: list[dict[str, str]]) -> list[dict[str, str]]:
                 "tool_name": tool_name,
                 "content": bounded_content,
                 "visibility": "shared",
+                "summary": item.get("summary", " ".join(bounded_content.split())[:280]),
+                "title": item.get("title", tool_name),
+                "path": item.get("path"),
+                "provenance": item.get("provenance", f"shared result from {tool_name}"),
             }
         )
         remaining_characters -= len(bounded_content)
@@ -425,6 +492,8 @@ def _assistant_message(
         "handoff_id": handoff.get("handoff_id") if handoff else None,
         "handoff_from_agent_id": handoff.get("from_agent_id") if handoff else None,
         "handoff_reason": handoff.get("reason") if handoff else None,
+        "handoff_task": handoff.get("task") if handoff else None,
+        "handoff_evidence_count": len(handoff.get("evidence", [])) if handoff else None,
     }
 
 
@@ -468,7 +537,22 @@ def _build_chat_agent(
             "targets": [memory["target"] for memory in approved_memories],
             "layer_counts": layer_counts,
             "estimated_characters": sum(len(str(memory["content"])) for memory in approved_memories),
+            "records": [
+                {
+                    "proposal_id": memory["proposal_id"],
+                    "target": memory["target"],
+                    "owner_agent_id": memory.get("agent_id"),
+                    "scope": memory.get("scope", "global"),
+                    "visibility": memory.get("visibility", "shared"),
+                }
+                for memory in approved_memories
+            ],
         },
+    )
+    traces_store.append_event(
+        trace,
+        kind="persona_loaded",
+        payload={"agent_id": agent_profile.agent_id, "persona_path": agent_profile.persona_path},
     )
     created_proposals: list[dict[str, Any]] = []
     requested_handoffs: list[dict[str, Any]] = []
@@ -506,6 +590,17 @@ def _record_created_memory_proposals(
                 "status": proposal["status"],
             },
         )
+
+
+def _record_provider_tool_call_error(trace: dict[str, Any], error: Exception) -> None:
+    diagnostic = provider_tool_call_diagnostic(error)
+    if diagnostic is None:
+        return
+    traces_store.append_event(
+        trace,
+        kind="provider_tool_call_invalid",
+        payload={"diagnostic": diagnostic, "redacted": True},
+    )
 
 
 async def _invoke_agent(agent: Any, payload: dict[str, Any]) -> Any:
@@ -682,6 +777,7 @@ async def _chat_sse(request: ChatRequest, *, user_id: str) -> AsyncIterator[dict
                     }
                 break
             except Exception as exc:
+                _record_provider_tool_call_error(trace, exc)
                 failure = classify_runtime_failure(exc)
                 traces_store.record_error(
                     trace,
@@ -796,6 +892,7 @@ def list_agents() -> dict[str, list[dict[str, Any]]]:
                 "aliases": list(profile.aliases),
                 "cognitive_focus": profile.cognitive_focus,
                 "community_role": profile.community_role,
+                "allowed_handoff_targets": list(profile.allowed_handoff_targets),
                 "is_default": profile.agent_id == "lighthouse",
             }
             for profile in list_agent_profiles()
@@ -852,6 +949,7 @@ async def chat(request: ChatRequest, x_user_id: str | None = Header(default=None
                 round_evidence = _extract_tool_evidence(result)
                 break
             except Exception as exc:
+                _record_provider_tool_call_error(trace, exc)
                 failure = classify_runtime_failure(exc)
                 traces_store.record_error(
                     trace,
@@ -1047,6 +1145,7 @@ def list_sessions(x_user_id: str | None = Header(default=None)) -> dict[str, lis
         for path in sorted(sessions_dir.glob("*.json"))
         if path.is_file()
     ]
+    sessions.sort(key=lambda session: str(session["last_modified"]), reverse=True)
     return {"sessions": sessions}
 
 
@@ -1149,24 +1248,54 @@ async def run_graph_demo(
         user_id=user_id,
     )
     traces_store.append_event(trace, kind="user_message", payload={"content": request.message})
-    traces_store.append_event(
-        trace,
-        kind="tool_call",
-        payload={
-            "name": "search_knowledge_base",
-            "input": {"query": query, "use_graph": True},
-        },
-    )
-    graph_result = graph_index.expand_graph_evidence(query)
+    try:
+        traces_store.append_event(
+            trace,
+            kind="tool_call",
+            payload={"name": "search_knowledge_base", "input": {"query": query, "use_graph": False}},
+        )
+        direct_result = str(search_knowledge_base.invoke({"query": query, "use_graph": False}))
+        traces_store.append_event(
+            trace,
+            kind="tool_result",
+            payload={"name": "search_knowledge_base", "content": direct_result, "mode": "direct"},
+        )
+        traces_store.append_event(
+            trace,
+            kind="tool_call",
+            payload={"name": "search_knowledge_base", "input": {"query": query, "use_graph": True}},
+        )
+        graph_result = graph_index.expand_graph_evidence(query)
+        graph_result["direct_result"] = direct_result
+        graph_result["graph_result"] = str(search_knowledge_base.invoke({"query": query, "use_graph": True}))
+    except Exception as exc:
+        _record_provider_tool_call_error(trace, exc)
+        failure = classify_runtime_failure(exc)
+        traces_store.record_error(
+            trace,
+            category=failure.category,
+            detail=failure.detail,
+            friendly_message=failure.friendly_message,
+            recoverable=failure.recoverable,
+        )
+        traces_store.finalize_trace(trace, final_status="error")
+        traces_store.save_trace(trace)
+        raise HTTPException(status_code=502, detail=failure.friendly_message) from exc
+
     _record_graph_result(trace, graph_result)
     reply = _format_graph_demo_reply(query, graph_result)
+    comparison = {
+        "query": query,
+        "direct_result": graph_result["direct_result"],
+        "graph_result": graph_result["graph_result"],
+        "expanded_evidence_count": len(graph_result.get("expanded_node_ids", [])),
+    }
+    trace["graph_retrieval"]["comparison"] = comparison
+    traces_store.append_event(trace, kind="graph_direct_vs_graph", payload=comparison)
     traces_store.append_event(
         trace,
         kind="tool_result",
-        payload={
-            "name": "search_knowledge_base",
-            "content": reply,
-        },
+        payload={"name": "search_knowledge_base", "content": graph_result["graph_result"], "mode": "graph"},
     )
     traces_store.append_event(trace, kind="final", payload={"content": reply})
     traces_store.finalize_trace(trace, final_status="success")
