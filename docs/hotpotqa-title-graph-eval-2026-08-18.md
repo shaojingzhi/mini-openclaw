@@ -1,5 +1,7 @@
 # HotpotQA Title-Mention Graph Evaluation
 
+[中文版](hotpotqa-title-graph-eval-2026-08-18.zh-CN.md)
+
 ## Question
 
 The earlier local evaluation could distinguish broader graph candidate coverage
