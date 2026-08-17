@@ -106,7 +106,9 @@ def _build_or_load_index(knowledge_dir: Path, storage_dir: Path) -> Any:
             # Persisted index is missing/corrupt — fall through and rebuild.
             pass
 
-    documents = SimpleDirectoryReader(input_dir=str(knowledge_dir)).load_data()
+    documents = SimpleDirectoryReader(
+        input_dir=str(knowledge_dir), recursive=True
+    ).load_data()
     index = VectorStoreIndex.from_documents(documents)
     storage_dir.mkdir(parents=True, exist_ok=True)
     index.storage_context.persist(persist_dir=str(storage_dir))

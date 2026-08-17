@@ -62,6 +62,13 @@ class SearchKnowledgeBaseSeededTests(unittest.TestCase):
             "Whip the mixture for ten minutes until stiff peaks form.\n",
             encoding="utf-8",
         )
+        nested = knowledge / "interview"
+        nested.mkdir()
+        (nested / "graph_notes.md").write_text(
+            "# Graph Retrieval Notes\n\n"
+            "Graph expansion should rerank evidence before it reaches the prompt.\n",
+            encoding="utf-8",
+        )
         clear_cache()
         self._k = patch.object(sk_mod, "KNOWLEDGE_DIR", knowledge)
         self._s = patch.object(sk_mod, "STORAGE_DIR", self._tmp / "storage")
@@ -120,6 +127,11 @@ class SearchKnowledgeBaseSeededTests(unittest.TestCase):
         # Document body content was returned.
         self.assertIn("Marshmallow Recipe", out)
         self.assertNotIn("Graph-expanded evidence", out)
+
+    def test_keyword_retrieves_nested_document(self) -> None:
+        out = search_knowledge_base.invoke({"query": "rerank evidence"})
+        self.assertIn("graph_notes.md", out)
+        self.assertIn("Graph Retrieval Notes", out)
 
     def test_graph_mode_appends_related_evidence(self) -> None:
         out = search_knowledge_base.invoke(

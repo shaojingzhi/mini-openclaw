@@ -1,0 +1,1055 @@
+{
+  "execution_mode": "live_hybrid_graph_lexical_rerank",
+  "top_k": 5,
+  "case_count": 5,
+  "graph_node_count": 217,
+  "graph_edge_count": 259,
+  "rerank_policy": {
+    "lexical_term_overlap": true,
+    "hybrid_origin_bonus": 0.12,
+    "graph_origin_bonus": 0.06,
+    "edge_bonus": {
+      "references": 0.12,
+      "uses_tool": 0.1,
+      "failed_at": 0.08,
+      "contains": 0.06,
+      "mentions": 0.03
+    },
+    "hop_penalty_per_hop": 0.04
+  },
+  "summary": {
+    "hybrid_only": {
+      "case_count": 5,
+      "recall_at_k": 0.3667,
+      "mrr": 0.8,
+      "hit_at_1": 0.8,
+      "ndcg_at_k": 0.4681
+    },
+    "hybrid_plus_graph_direct_reranked": {
+      "case_count": 5,
+      "recall_at_k": 0.6167,
+      "mrr": 0.85,
+      "hit_at_1": 0.8,
+      "ndcg_at_k": 0.6189
+    },
+    "hybrid_plus_graph_bfs_reranked": {
+      "case_count": 5,
+      "recall_at_k": 0.6167,
+      "mrr": 0.85,
+      "hit_at_1": 0.8,
+      "ndcg_at_k": 0.6189
+    }
+  },
+  "delta_vs_hybrid": {
+    "recall_at_k": 0.25,
+    "mrr": 0.05,
+    "hit_at_1": 0.0,
+    "ndcg_at_k": 0.1508
+  },
+  "bfs_delta_vs_graph_direct": {
+    "recall_at_k": 0.0,
+    "mrr": 0.0,
+    "hit_at_1": 0.0,
+    "ndcg_at_k": 0.0
+  },
+  "cases": [
+    {
+      "case_id": "live-rq-001",
+      "query": "How do evaluation notes connect to the Mini-OpenClaw interview demo and reusable answer skills?",
+      "strategy": "hybrid_only",
+      "relevant_paths": [
+        "backend/knowledge/eval_agent_notes.md",
+        "backend/knowledge/interview/interview_demo_pack.md",
+        "backend/workspace/INTERVIEW_DEMO.md",
+        "backend/skills/resume_story_coach/SKILL.md"
+      ],
+      "retrieved_paths": [
+        "backend/knowledge/eval_agent_notes.md",
+        "backend/knowledge/interview/interview_demo_pack.md",
+        "backend/knowledge/interview/interview_question_bank.md"
+      ],
+      "candidates": [
+        {
+          "path": "backend/knowledge/eval_agent_notes.md",
+          "origins": [
+            "hybrid"
+          ],
+          "hop": 0,
+          "edge_type": null,
+          "rerank_score": 0.786667
+        },
+        {
+          "path": "backend/knowledge/interview/interview_demo_pack.md",
+          "origins": [
+            "hybrid"
+          ],
+          "hop": 0,
+          "edge_type": null,
+          "rerank_score": 0.786667
+        },
+        {
+          "path": "backend/knowledge/interview/interview_question_bank.md",
+          "origins": [
+            "hybrid"
+          ],
+          "hop": 0,
+          "edge_type": null,
+          "rerank_score": 0.675556
+        }
+      ],
+      "metrics": {
+        "top_k": 5,
+        "recall_at_k": 0.5,
+        "mrr": 1.0,
+        "hit_at_1": 1.0,
+        "ndcg_at_k": 0.6367
+      }
+    },
+    {
+      "case_id": "live-rq-001",
+      "query": "How do evaluation notes connect to the Mini-OpenClaw interview demo and reusable answer skills?",
+      "strategy": "hybrid_plus_graph_direct_reranked",
+      "relevant_paths": [
+        "backend/knowledge/eval_agent_notes.md",
+        "backend/knowledge/interview/interview_demo_pack.md",
+        "backend/workspace/INTERVIEW_DEMO.md",
+        "backend/skills/resume_story_coach/SKILL.md"
+      ],
+      "retrieved_paths": [
+        "backend/knowledge/eval_agent_notes.md",
+        "backend/knowledge/interview/interview_demo_pack.md",
+        "backend/knowledge/interview/interview_question_bank.md",
+        "backend/workspace/INTERVIEW_DEMO.md",
+        "backend/skills/interview_answer_builder/SKILL.md"
+      ],
+      "candidates": [
+        {
+          "path": "backend/knowledge/eval_agent_notes.md",
+          "origins": [
+            "graph_direct",
+            "hybrid"
+          ],
+          "hop": 0,
+          "edge_type": null,
+          "rerank_score": 0.786667
+        },
+        {
+          "path": "backend/knowledge/interview/interview_demo_pack.md",
+          "origins": [
+            "graph_direct",
+            "hybrid"
+          ],
+          "hop": 0,
+          "edge_type": null,
+          "rerank_score": 0.786667
+        },
+        {
+          "path": "backend/knowledge/interview/interview_question_bank.md",
+          "origins": [
+            "graph_direct",
+            "hybrid"
+          ],
+          "hop": 0,
+          "edge_type": null,
+          "rerank_score": 0.675556
+        },
+        {
+          "path": "backend/workspace/INTERVIEW_DEMO.md",
+          "origins": [
+            "graph_direct"
+          ],
+          "hop": 0,
+          "edge_type": null,
+          "rerank_score": 0.504444
+        },
+        {
+          "path": "backend/skills/interview_answer_builder/SKILL.md",
+          "origins": [
+            "graph_direct"
+          ],
+          "hop": 0,
+          "edge_type": null,
+          "rerank_score": 0.393333
+        }
+      ],
+      "metrics": {
+        "top_k": 5,
+        "recall_at_k": 0.75,
+        "mrr": 1.0,
+        "hit_at_1": 1.0,
+        "ndcg_at_k": 0.8048
+      }
+    },
+    {
+      "case_id": "live-rq-001",
+      "query": "How do evaluation notes connect to the Mini-OpenClaw interview demo and reusable answer skills?",
+      "strategy": "hybrid_plus_graph_bfs_reranked",
+      "relevant_paths": [
+        "backend/knowledge/eval_agent_notes.md",
+        "backend/knowledge/interview/interview_demo_pack.md",
+        "backend/workspace/INTERVIEW_DEMO.md",
+        "backend/skills/resume_story_coach/SKILL.md"
+      ],
+      "retrieved_paths": [
+        "backend/knowledge/eval_agent_notes.md",
+        "backend/knowledge/interview/interview_demo_pack.md",
+        "backend/knowledge/interview/interview_question_bank.md",
+        "backend/workspace/INTERVIEW_DEMO.md",
+        "backend/skills/interview_answer_builder/SKILL.md"
+      ],
+      "candidates": [
+        {
+          "path": "backend/knowledge/eval_agent_notes.md",
+          "origins": [
+            "graph_direct",
+            "hybrid"
+          ],
+          "hop": 0,
+          "edge_type": null,
+          "rerank_score": 0.786667
+        },
+        {
+          "path": "backend/knowledge/interview/interview_demo_pack.md",
+          "origins": [
+            "graph_direct",
+            "hybrid"
+          ],
+          "hop": 0,
+          "edge_type": null,
+          "rerank_score": 0.786667
+        },
+        {
+          "path": "backend/knowledge/interview/interview_question_bank.md",
+          "origins": [
+            "graph_direct",
+            "hybrid"
+          ],
+          "hop": 0,
+          "edge_type": null,
+          "rerank_score": 0.675556
+        },
+        {
+          "path": "backend/workspace/INTERVIEW_DEMO.md",
+          "origins": [
+            "graph_direct"
+          ],
+          "hop": 0,
+          "edge_type": null,
+          "rerank_score": 0.504444
+        },
+        {
+          "path": "backend/skills/interview_answer_builder/SKILL.md",
+          "origins": [
+            "graph_direct"
+          ],
+          "hop": 0,
+          "edge_type": null,
+          "rerank_score": 0.393333
+        }
+      ],
+      "metrics": {
+        "top_k": 5,
+        "recall_at_k": 0.75,
+        "mrr": 1.0,
+        "hit_at_1": 1.0,
+        "ndcg_at_k": 0.8048
+      }
+    },
+    {
+      "case_id": "live-rq-002",
+      "query": "How should an agent explain file-first memory, user preferences, and approval provenance?",
+      "strategy": "hybrid_only",
+      "relevant_paths": [
+        "backend/workspace/MEMORY.md",
+        "backend/workspace/USER.md",
+        "backend/knowledge/interview/interview_demo_pack.md"
+      ],
+      "retrieved_paths": [
+        "backend/knowledge/interview/interview_demo_pack.md",
+        "backend/knowledge/interview/interview_question_bank.md",
+        "backend/knowledge/eval_agent_notes.md"
+      ],
+      "candidates": [
+        {
+          "path": "backend/knowledge/interview/interview_demo_pack.md",
+          "origins": [
+            "hybrid"
+          ],
+          "hop": 0,
+          "edge_type": null,
+          "rerank_score": 0.675556
+        },
+        {
+          "path": "backend/knowledge/interview/interview_question_bank.md",
+          "origins": [
+            "hybrid"
+          ],
+          "hop": 0,
+          "edge_type": null,
+          "rerank_score": 0.675556
+        },
+        {
+          "path": "backend/knowledge/eval_agent_notes.md",
+          "origins": [
+            "hybrid"
+          ],
+          "hop": 0,
+          "edge_type": null,
+          "rerank_score": 0.564444
+        }
+      ],
+      "metrics": {
+        "top_k": 5,
+        "recall_at_k": 0.3333,
+        "mrr": 1.0,
+        "hit_at_1": 1.0,
+        "ndcg_at_k": 0.4693
+      }
+    },
+    {
+      "case_id": "live-rq-002",
+      "query": "How should an agent explain file-first memory, user preferences, and approval provenance?",
+      "strategy": "hybrid_plus_graph_direct_reranked",
+      "relevant_paths": [
+        "backend/workspace/MEMORY.md",
+        "backend/workspace/USER.md",
+        "backend/knowledge/interview/interview_demo_pack.md"
+      ],
+      "retrieved_paths": [
+        "backend/knowledge/interview/interview_demo_pack.md",
+        "backend/knowledge/interview/interview_question_bank.md",
+        "backend/knowledge/eval_agent_notes.md",
+        "backend/workspace/IDENTITY.md",
+        "backend/workspace/INTERVIEW_DEMO.md"
+      ],
+      "candidates": [
+        {
+          "path": "backend/knowledge/interview/interview_demo_pack.md",
+          "origins": [
+            "graph_direct",
+            "hybrid"
+          ],
+          "hop": 0,
+          "edge_type": null,
+          "rerank_score": 0.675556
+        },
+        {
+          "path": "backend/knowledge/interview/interview_question_bank.md",
+          "origins": [
+            "graph_direct",
+            "hybrid"
+          ],
+          "hop": 0,
+          "edge_type": null,
+          "rerank_score": 0.675556
+        },
+        {
+          "path": "backend/knowledge/eval_agent_notes.md",
+          "origins": [
+            "graph_direct",
+            "hybrid"
+          ],
+          "hop": 0,
+          "edge_type": null,
+          "rerank_score": 0.564444
+        },
+        {
+          "path": "backend/workspace/IDENTITY.md",
+          "origins": [
+            "graph_direct"
+          ],
+          "hop": 0,
+          "edge_type": null,
+          "rerank_score": 0.393333
+        },
+        {
+          "path": "backend/workspace/INTERVIEW_DEMO.md",
+          "origins": [
+            "graph_direct"
+          ],
+          "hop": 0,
+          "edge_type": null,
+          "rerank_score": 0.393333
+        }
+      ],
+      "metrics": {
+        "top_k": 5,
+        "recall_at_k": 0.3333,
+        "mrr": 1.0,
+        "hit_at_1": 1.0,
+        "ndcg_at_k": 0.4693
+      }
+    },
+    {
+      "case_id": "live-rq-002",
+      "query": "How should an agent explain file-first memory, user preferences, and approval provenance?",
+      "strategy": "hybrid_plus_graph_bfs_reranked",
+      "relevant_paths": [
+        "backend/workspace/MEMORY.md",
+        "backend/workspace/USER.md",
+        "backend/knowledge/interview/interview_demo_pack.md"
+      ],
+      "retrieved_paths": [
+        "backend/knowledge/interview/interview_demo_pack.md",
+        "backend/knowledge/interview/interview_question_bank.md",
+        "backend/knowledge/eval_agent_notes.md",
+        "backend/workspace/IDENTITY.md",
+        "backend/workspace/INTERVIEW_DEMO.md"
+      ],
+      "candidates": [
+        {
+          "path": "backend/knowledge/interview/interview_demo_pack.md",
+          "origins": [
+            "graph_direct",
+            "hybrid"
+          ],
+          "hop": 0,
+          "edge_type": null,
+          "rerank_score": 0.675556
+        },
+        {
+          "path": "backend/knowledge/interview/interview_question_bank.md",
+          "origins": [
+            "graph_direct",
+            "hybrid"
+          ],
+          "hop": 0,
+          "edge_type": null,
+          "rerank_score": 0.675556
+        },
+        {
+          "path": "backend/knowledge/eval_agent_notes.md",
+          "origins": [
+            "graph_direct",
+            "hybrid"
+          ],
+          "hop": 0,
+          "edge_type": null,
+          "rerank_score": 0.564444
+        },
+        {
+          "path": "backend/workspace/IDENTITY.md",
+          "origins": [
+            "graph_direct"
+          ],
+          "hop": 0,
+          "edge_type": null,
+          "rerank_score": 0.393333
+        },
+        {
+          "path": "backend/workspace/INTERVIEW_DEMO.md",
+          "origins": [
+            "graph_direct"
+          ],
+          "hop": 0,
+          "edge_type": null,
+          "rerank_score": 0.393333
+        }
+      ],
+      "metrics": {
+        "top_k": 5,
+        "recall_at_k": 0.3333,
+        "mrr": 1.0,
+        "hit_at_1": 1.0,
+        "ndcg_at_k": 0.4693
+      }
+    },
+    {
+      "case_id": "live-rq-003",
+      "query": "Which artifacts explain graph-assisted retrieval boundaries and trace diagnostics?",
+      "strategy": "hybrid_only",
+      "relevant_paths": [
+        "backend/knowledge/interview/interview_demo_pack.md",
+        "backend/knowledge/eval_agent_notes.md",
+        "backend/workspace/INTERVIEW_DEMO.md"
+      ],
+      "retrieved_paths": [
+        "backend/knowledge/interview/interview_demo_pack.md",
+        "backend/knowledge/eval_agent_notes.md",
+        "backend/knowledge/interview/interview_question_bank.md"
+      ],
+      "candidates": [
+        {
+          "path": "backend/knowledge/interview/interview_demo_pack.md",
+          "origins": [
+            "hybrid"
+          ],
+          "hop": 0,
+          "edge_type": null,
+          "rerank_score": 0.691429
+        },
+        {
+          "path": "backend/knowledge/eval_agent_notes.md",
+          "origins": [
+            "hybrid"
+          ],
+          "hop": 0,
+          "edge_type": null,
+          "rerank_score": 0.405714
+        },
+        {
+          "path": "backend/knowledge/interview/interview_question_bank.md",
+          "origins": [
+            "hybrid"
+          ],
+          "hop": 0,
+          "edge_type": null,
+          "rerank_score": 0.405714
+        }
+      ],
+      "metrics": {
+        "top_k": 5,
+        "recall_at_k": 0.6667,
+        "mrr": 1.0,
+        "hit_at_1": 1.0,
+        "ndcg_at_k": 0.7654
+      }
+    },
+    {
+      "case_id": "live-rq-003",
+      "query": "Which artifacts explain graph-assisted retrieval boundaries and trace diagnostics?",
+      "strategy": "hybrid_plus_graph_direct_reranked",
+      "relevant_paths": [
+        "backend/knowledge/interview/interview_demo_pack.md",
+        "backend/knowledge/eval_agent_notes.md",
+        "backend/workspace/INTERVIEW_DEMO.md"
+      ],
+      "retrieved_paths": [
+        "backend/knowledge/interview/interview_demo_pack.md",
+        "backend/knowledge/eval_agent_notes.md",
+        "backend/knowledge/interview/interview_question_bank.md",
+        "backend/workspace/INTERVIEW_DEMO.md",
+        "backend/data/traces/trace_01a01f795a7a4c969ec1dc76a69871d5.json"
+      ],
+      "candidates": [
+        {
+          "path": "backend/knowledge/interview/interview_demo_pack.md",
+          "origins": [
+            "graph_direct",
+            "hybrid"
+          ],
+          "hop": 0,
+          "edge_type": null,
+          "rerank_score": 0.691429
+        },
+        {
+          "path": "backend/knowledge/eval_agent_notes.md",
+          "origins": [
+            "graph_direct",
+            "hybrid"
+          ],
+          "hop": 0,
+          "edge_type": null,
+          "rerank_score": 0.405714
+        },
+        {
+          "path": "backend/knowledge/interview/interview_question_bank.md",
+          "origins": [
+            "graph_direct",
+            "hybrid"
+          ],
+          "hop": 0,
+          "edge_type": null,
+          "rerank_score": 0.405714
+        },
+        {
+          "path": "backend/workspace/INTERVIEW_DEMO.md",
+          "origins": [
+            "graph_direct"
+          ],
+          "hop": 0,
+          "edge_type": null,
+          "rerank_score": 0.345714
+        },
+        {
+          "path": "backend/data/traces/trace_01a01f795a7a4c969ec1dc76a69871d5.json",
+          "origins": [
+            "graph_direct"
+          ],
+          "hop": 0,
+          "edge_type": null,
+          "rerank_score": 0.202857
+        }
+      ],
+      "metrics": {
+        "top_k": 5,
+        "recall_at_k": 1.0,
+        "mrr": 1.0,
+        "hit_at_1": 1.0,
+        "ndcg_at_k": 0.9675
+      }
+    },
+    {
+      "case_id": "live-rq-003",
+      "query": "Which artifacts explain graph-assisted retrieval boundaries and trace diagnostics?",
+      "strategy": "hybrid_plus_graph_bfs_reranked",
+      "relevant_paths": [
+        "backend/knowledge/interview/interview_demo_pack.md",
+        "backend/knowledge/eval_agent_notes.md",
+        "backend/workspace/INTERVIEW_DEMO.md"
+      ],
+      "retrieved_paths": [
+        "backend/knowledge/interview/interview_demo_pack.md",
+        "backend/knowledge/eval_agent_notes.md",
+        "backend/knowledge/interview/interview_question_bank.md",
+        "backend/workspace/INTERVIEW_DEMO.md",
+        "backend/data/traces/trace_01a01f795a7a4c969ec1dc76a69871d5.json"
+      ],
+      "candidates": [
+        {
+          "path": "backend/knowledge/interview/interview_demo_pack.md",
+          "origins": [
+            "graph_direct",
+            "hybrid"
+          ],
+          "hop": 0,
+          "edge_type": null,
+          "rerank_score": 0.691429
+        },
+        {
+          "path": "backend/knowledge/eval_agent_notes.md",
+          "origins": [
+            "graph_direct",
+            "hybrid"
+          ],
+          "hop": 0,
+          "edge_type": null,
+          "rerank_score": 0.405714
+        },
+        {
+          "path": "backend/knowledge/interview/interview_question_bank.md",
+          "origins": [
+            "graph_direct",
+            "hybrid"
+          ],
+          "hop": 0,
+          "edge_type": null,
+          "rerank_score": 0.405714
+        },
+        {
+          "path": "backend/workspace/INTERVIEW_DEMO.md",
+          "origins": [
+            "graph_direct"
+          ],
+          "hop": 0,
+          "edge_type": null,
+          "rerank_score": 0.345714
+        },
+        {
+          "path": "backend/data/traces/trace_01a01f795a7a4c969ec1dc76a69871d5.json",
+          "origins": [
+            "graph_direct"
+          ],
+          "hop": 0,
+          "edge_type": null,
+          "rerank_score": 0.202857
+        }
+      ],
+      "metrics": {
+        "top_k": 5,
+        "recall_at_k": 1.0,
+        "mrr": 1.0,
+        "hit_at_1": 1.0,
+        "ndcg_at_k": 0.9675
+      }
+    },
+    {
+      "case_id": "live-rq-004",
+      "query": "How do Agent skills declare tool usage and keep private workspace access isolated?",
+      "strategy": "hybrid_only",
+      "relevant_paths": [
+        "backend/workspace/AGENTS.md",
+        "backend/workspace/SKILLS_SNAPSHOT.md",
+        "backend/skills/resume_story_coach/SKILL.md"
+      ],
+      "retrieved_paths": [
+        "backend/knowledge/interview/interview_question_bank.md",
+        "backend/knowledge/eval_agent_notes.md",
+        "backend/knowledge/interview/interview_demo_pack.md"
+      ],
+      "candidates": [
+        {
+          "path": "backend/knowledge/interview/interview_question_bank.md",
+          "origins": [
+            "hybrid"
+          ],
+          "hop": 0,
+          "edge_type": null,
+          "rerank_score": 0.62
+        },
+        {
+          "path": "backend/knowledge/eval_agent_notes.md",
+          "origins": [
+            "hybrid"
+          ],
+          "hop": 0,
+          "edge_type": null,
+          "rerank_score": 0.52
+        },
+        {
+          "path": "backend/knowledge/interview/interview_demo_pack.md",
+          "origins": [
+            "hybrid"
+          ],
+          "hop": 0,
+          "edge_type": null,
+          "rerank_score": 0.52
+        }
+      ],
+      "metrics": {
+        "top_k": 5,
+        "recall_at_k": 0.0,
+        "mrr": 0.0,
+        "hit_at_1": 0.0,
+        "ndcg_at_k": 0.0
+      }
+    },
+    {
+      "case_id": "live-rq-004",
+      "query": "How do Agent skills declare tool usage and keep private workspace access isolated?",
+      "strategy": "hybrid_plus_graph_direct_reranked",
+      "relevant_paths": [
+        "backend/workspace/AGENTS.md",
+        "backend/workspace/SKILLS_SNAPSHOT.md",
+        "backend/skills/resume_story_coach/SKILL.md"
+      ],
+      "retrieved_paths": [
+        "backend/knowledge/interview/interview_question_bank.md",
+        "backend/knowledge/eval_agent_notes.md",
+        "backend/knowledge/interview/interview_demo_pack.md",
+        "backend/workspace/AGENTS.md",
+        "backend/workspace/IDENTITY.md"
+      ],
+      "candidates": [
+        {
+          "path": "backend/knowledge/interview/interview_question_bank.md",
+          "origins": [
+            "graph_direct",
+            "hybrid"
+          ],
+          "hop": 0,
+          "edge_type": null,
+          "rerank_score": 0.62
+        },
+        {
+          "path": "backend/knowledge/eval_agent_notes.md",
+          "origins": [
+            "graph_direct",
+            "hybrid"
+          ],
+          "hop": 0,
+          "edge_type": null,
+          "rerank_score": 0.52
+        },
+        {
+          "path": "backend/knowledge/interview/interview_demo_pack.md",
+          "origins": [
+            "graph_direct",
+            "hybrid"
+          ],
+          "hop": 0,
+          "edge_type": null,
+          "rerank_score": 0.52
+        },
+        {
+          "path": "backend/workspace/AGENTS.md",
+          "origins": [
+            "graph_direct"
+          ],
+          "hop": 0,
+          "edge_type": null,
+          "rerank_score": 0.46
+        },
+        {
+          "path": "backend/workspace/IDENTITY.md",
+          "origins": [
+            "graph_direct"
+          ],
+          "hop": 0,
+          "edge_type": null,
+          "rerank_score": 0.36
+        }
+      ],
+      "metrics": {
+        "top_k": 5,
+        "recall_at_k": 0.3333,
+        "mrr": 0.25,
+        "hit_at_1": 0.0,
+        "ndcg_at_k": 0.2021
+      }
+    },
+    {
+      "case_id": "live-rq-004",
+      "query": "How do Agent skills declare tool usage and keep private workspace access isolated?",
+      "strategy": "hybrid_plus_graph_bfs_reranked",
+      "relevant_paths": [
+        "backend/workspace/AGENTS.md",
+        "backend/workspace/SKILLS_SNAPSHOT.md",
+        "backend/skills/resume_story_coach/SKILL.md"
+      ],
+      "retrieved_paths": [
+        "backend/knowledge/interview/interview_question_bank.md",
+        "backend/knowledge/eval_agent_notes.md",
+        "backend/knowledge/interview/interview_demo_pack.md",
+        "backend/workspace/AGENTS.md",
+        "backend/workspace/IDENTITY.md"
+      ],
+      "candidates": [
+        {
+          "path": "backend/knowledge/interview/interview_question_bank.md",
+          "origins": [
+            "graph_direct",
+            "hybrid"
+          ],
+          "hop": 0,
+          "edge_type": null,
+          "rerank_score": 0.62
+        },
+        {
+          "path": "backend/knowledge/eval_agent_notes.md",
+          "origins": [
+            "graph_direct",
+            "hybrid"
+          ],
+          "hop": 0,
+          "edge_type": null,
+          "rerank_score": 0.52
+        },
+        {
+          "path": "backend/knowledge/interview/interview_demo_pack.md",
+          "origins": [
+            "graph_direct",
+            "hybrid"
+          ],
+          "hop": 0,
+          "edge_type": null,
+          "rerank_score": 0.52
+        },
+        {
+          "path": "backend/workspace/AGENTS.md",
+          "origins": [
+            "graph_direct"
+          ],
+          "hop": 0,
+          "edge_type": null,
+          "rerank_score": 0.46
+        },
+        {
+          "path": "backend/workspace/IDENTITY.md",
+          "origins": [
+            "graph_direct"
+          ],
+          "hop": 0,
+          "edge_type": null,
+          "rerank_score": 0.36
+        }
+      ],
+      "metrics": {
+        "top_k": 5,
+        "recall_at_k": 0.3333,
+        "mrr": 0.25,
+        "hit_at_1": 0.0,
+        "ndcg_at_k": 0.2021
+      }
+    },
+    {
+      "case_id": "live-rq-005",
+      "query": "What makes the local Agent interview demo repeatable across sessions?",
+      "strategy": "hybrid_only",
+      "relevant_paths": [
+        "backend/workspace/INTERVIEW_DEMO.md",
+        "backend/knowledge/interview/interview_demo_pack.md",
+        "backend/workspace/IDENTITY.md"
+      ],
+      "retrieved_paths": [
+        "backend/knowledge/interview/interview_demo_pack.md",
+        "backend/knowledge/eval_agent_notes.md",
+        "backend/knowledge/interview/interview_question_bank.md"
+      ],
+      "candidates": [
+        {
+          "path": "backend/knowledge/interview/interview_demo_pack.md",
+          "origins": [
+            "hybrid"
+          ],
+          "hop": 0,
+          "edge_type": null,
+          "rerank_score": 0.87
+        },
+        {
+          "path": "backend/knowledge/eval_agent_notes.md",
+          "origins": [
+            "hybrid"
+          ],
+          "hop": 0,
+          "edge_type": null,
+          "rerank_score": 0.62
+        },
+        {
+          "path": "backend/knowledge/interview/interview_question_bank.md",
+          "origins": [
+            "hybrid"
+          ],
+          "hop": 0,
+          "edge_type": null,
+          "rerank_score": 0.62
+        }
+      ],
+      "metrics": {
+        "top_k": 5,
+        "recall_at_k": 0.3333,
+        "mrr": 1.0,
+        "hit_at_1": 1.0,
+        "ndcg_at_k": 0.4693
+      }
+    },
+    {
+      "case_id": "live-rq-005",
+      "query": "What makes the local Agent interview demo repeatable across sessions?",
+      "strategy": "hybrid_plus_graph_direct_reranked",
+      "relevant_paths": [
+        "backend/workspace/INTERVIEW_DEMO.md",
+        "backend/knowledge/interview/interview_demo_pack.md",
+        "backend/workspace/IDENTITY.md"
+      ],
+      "retrieved_paths": [
+        "backend/knowledge/interview/interview_demo_pack.md",
+        "backend/knowledge/eval_agent_notes.md",
+        "backend/knowledge/interview/interview_question_bank.md",
+        "backend/skills/resume_story_coach/SKILL.md",
+        "backend/workspace/INTERVIEW_DEMO.md"
+      ],
+      "candidates": [
+        {
+          "path": "backend/knowledge/interview/interview_demo_pack.md",
+          "origins": [
+            "graph_direct",
+            "hybrid"
+          ],
+          "hop": 0,
+          "edge_type": null,
+          "rerank_score": 0.87
+        },
+        {
+          "path": "backend/knowledge/eval_agent_notes.md",
+          "origins": [
+            "graph_direct",
+            "hybrid"
+          ],
+          "hop": 0,
+          "edge_type": null,
+          "rerank_score": 0.62
+        },
+        {
+          "path": "backend/knowledge/interview/interview_question_bank.md",
+          "origins": [
+            "graph_direct",
+            "hybrid"
+          ],
+          "hop": 0,
+          "edge_type": null,
+          "rerank_score": 0.62
+        },
+        {
+          "path": "backend/skills/resume_story_coach/SKILL.md",
+          "origins": [
+            "graph_direct"
+          ],
+          "hop": 0,
+          "edge_type": null,
+          "rerank_score": 0.435
+        },
+        {
+          "path": "backend/workspace/INTERVIEW_DEMO.md",
+          "origins": [
+            "graph_direct"
+          ],
+          "hop": 0,
+          "edge_type": null,
+          "rerank_score": 0.435
+        }
+      ],
+      "metrics": {
+        "top_k": 5,
+        "recall_at_k": 0.6667,
+        "mrr": 1.0,
+        "hit_at_1": 1.0,
+        "ndcg_at_k": 0.6508
+      }
+    },
+    {
+      "case_id": "live-rq-005",
+      "query": "What makes the local Agent interview demo repeatable across sessions?",
+      "strategy": "hybrid_plus_graph_bfs_reranked",
+      "relevant_paths": [
+        "backend/workspace/INTERVIEW_DEMO.md",
+        "backend/knowledge/interview/interview_demo_pack.md",
+        "backend/workspace/IDENTITY.md"
+      ],
+      "retrieved_paths": [
+        "backend/knowledge/interview/interview_demo_pack.md",
+        "backend/knowledge/eval_agent_notes.md",
+        "backend/knowledge/interview/interview_question_bank.md",
+        "backend/skills/resume_story_coach/SKILL.md",
+        "backend/workspace/INTERVIEW_DEMO.md"
+      ],
+      "candidates": [
+        {
+          "path": "backend/knowledge/interview/interview_demo_pack.md",
+          "origins": [
+            "graph_direct",
+            "hybrid"
+          ],
+          "hop": 0,
+          "edge_type": null,
+          "rerank_score": 0.87
+        },
+        {
+          "path": "backend/knowledge/eval_agent_notes.md",
+          "origins": [
+            "graph_direct",
+            "hybrid"
+          ],
+          "hop": 0,
+          "edge_type": null,
+          "rerank_score": 0.62
+        },
+        {
+          "path": "backend/knowledge/interview/interview_question_bank.md",
+          "origins": [
+            "graph_direct",
+            "hybrid"
+          ],
+          "hop": 0,
+          "edge_type": null,
+          "rerank_score": 0.62
+        },
+        {
+          "path": "backend/skills/resume_story_coach/SKILL.md",
+          "origins": [
+            "graph_direct"
+          ],
+          "hop": 0,
+          "edge_type": null,
+          "rerank_score": 0.435
+        },
+        {
+          "path": "backend/workspace/INTERVIEW_DEMO.md",
+          "origins": [
+            "graph_direct"
+          ],
+          "hop": 0,
+          "edge_type": null,
+          "rerank_score": 0.435
+        }
+      ],
+      "metrics": {
+        "top_k": 5,
+        "recall_at_k": 0.6667,
+        "mrr": 1.0,
+        "hit_at_1": 1.0,
+        "ndcg_at_k": 0.6508
+      }
+    }
+  ]
+}
