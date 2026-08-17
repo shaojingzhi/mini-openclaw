@@ -1,10 +1,10 @@
 """Hybrid knowledge-base search tool for the Mini-OpenClaw agent (US-008).
 
-Combines a BM25 lexical retriever with a vector retriever over the documents
-under ``backend/knowledge/`` and returns the fused top-k passages. The
-underlying ``VectorStoreIndex`` is persisted under ``backend/storage/`` and
-reloaded on subsequent calls/startups so cold start does not pay the
-embedding cost twice.
+Combines a BM25 lexical retriever with a vector retriever when a real embedding
+provider is configured. Without one, it uses a BM25-only fallback instead of
+fusing random mock-vector scores into the ranking. The underlying
+``VectorStoreIndex`` is persisted under ``backend/storage/`` and reloaded on
+subsequent calls/startups so cold start does not pay the embedding cost twice.
 
 Design notes:
 
@@ -72,7 +72,7 @@ def _knowledge_files(knowledge_dir: Path) -> list[Path]:
     ]
 
 
-def _configure_settings() -> None:
+def _configure_settings() -> bool:
     from llama_index.core import Settings
     from llama_index.core.embeddings import MockEmbedding
     from llama_index.core.llms import MockLLM
@@ -80,14 +80,16 @@ def _configure_settings() -> None:
     Settings.llm = MockLLM()
     if not os.getenv("OPENAI_API_KEY"):
         Settings.embed_model = MockEmbedding(embed_dim=384)
-        return
+        return False
 
     try:
         from llama_index.embeddings.openai import OpenAIEmbedding
 
         Settings.embed_model = OpenAIEmbedding()
+        return True
     except Exception:
         Settings.embed_model = MockEmbedding(embed_dim=384)
+        return False
 
 
 def _build_or_load_index(knowledge_dir: Path, storage_dir: Path) -> Any:
@@ -120,18 +122,20 @@ def _build_hybrid_retriever(knowledge_dir: Path, storage_dir: Path) -> Any | Non
     if not files:
         return None
 
-    _configure_settings()
+    use_vector_retriever = _configure_settings()
 
-    from llama_index.core.retrievers import (
-        QueryFusionRetriever,
-        VectorIndexRetriever,
-    )
+    from llama_index.core.retrievers import VectorIndexRetriever
     from llama_index.retrievers.bm25 import BM25Retriever
 
     index = _build_or_load_index(knowledge_dir, storage_dir)
     nodes = list(index.docstore.docs.values())
 
     bm25 = BM25Retriever.from_defaults(nodes=nodes, similarity_top_k=RETRIEVAL_TOP_K)
+    if not use_vector_retriever:
+        return bm25
+
+    from llama_index.core.retrievers import QueryFusionRetriever
+
     vector = VectorIndexRetriever(index=index, similarity_top_k=RETRIEVAL_TOP_K)
     return QueryFusionRetriever(
         retrievers=[bm25, vector],
