@@ -487,17 +487,35 @@ def expand_graph_evidence(
             }
         )
 
-    direct_ids: list[str] = []
+    node_type_priority = {
+        "document": 0,
+        "workspace_file": 0,
+        "skill": 0,
+        "trace": 0,
+        "heading": 1,
+        "tool": 2,
+        "concept": 3,
+    }
+    direct_matches: list[tuple[int, int, str]] = []
     for node in graph.get("nodes", []):
         haystack = " ".join(
             [
                 str(node.get("label", "")),
                 str(node.get("path", "")),
                 json.dumps(node.get("metadata", {}), ensure_ascii=False),
+                str(node.get("summary", "")),
             ]
         ).lower()
-        if any(term in haystack for term in query_terms):
-            direct_ids.append(str(node["id"]))
+        score = sum(term in haystack for term in query_terms)
+        if score:
+            direct_matches.append(
+                (
+                    -score,
+                    node_type_priority.get(str(node.get("type")), 99),
+                    str(node["id"]),
+                )
+            )
+    direct_ids = [node_id for _, _, node_id in sorted(direct_matches)]
 
     visited = set(direct_ids)
     frontier = list(direct_ids)

@@ -1,0 +1,48 @@
+[
+  {
+    "id": "live-rq-001",
+    "query": "How do evaluation notes connect to the Mini-OpenClaw interview demo and reusable answer skills?",
+    "relevant_paths": [
+      "backend/knowledge/eval_agent_notes.md",
+      "backend/knowledge/interview/interview_demo_pack.md",
+      "backend/workspace/INTERVIEW_DEMO.md",
+      "backend/skills/resume_story_coach/SKILL.md"
+    ]
+  },
+  {
+    "id": "live-rq-002",
+    "query": "How should an agent explain file-first memory, user preferences, and approval provenance?",
+    "relevant_paths": [
+      "backend/workspace/MEMORY.md",
+      "backend/workspace/USER.md",
+      "backend/knowledge/interview/interview_demo_pack.md"
+    ]
+  },
+  {
+    "id": "live-rq-003",
+    "query": "Which artifacts explain graph-assisted retrieval boundaries and trace diagnostics?",
+    "relevant_paths": [
+      "backend/knowledge/interview/interview_demo_pack.md",
+      "backend/knowledge/eval_agent_notes.md",
+      "backend/workspace/INTERVIEW_DEMO.md"
+    ]
+  },
+  {
+    "id": "live-rq-004",
+    "query": "How do Agent skills declare tool usage and keep private workspace access isolated?",
+    "relevant_paths": [
+      "backend/workspace/AGENTS.md",
+      "backend/workspace/SKILLS_SNAPSHOT.md",
+      "backend/skills/resume_story_coach/SKILL.md"
+    ]
+  },
+  {
+    "id": "live-rq-005",
+    "query": "What makes the local Agent interview demo repeatable across sessions?",
+    "relevant_paths": [
+      "backend/workspace/INTERVIEW_DEMO.md",
+      "backend/knowledge/interview/interview_demo_pack.md",
+      "backend/workspace/IDENTITY.md"
+    ]
+  }
+]
