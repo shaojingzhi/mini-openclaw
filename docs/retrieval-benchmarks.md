@@ -52,6 +52,35 @@ three buckets separately:
 3. True multi-hop reasoning: only claim a BFS gain when expanded nodes add
    labeled supporting evidence after reranking.
 
+## HotpotQA Distractor: Title-Mention BFS
+
+`HotpotQA distractor` is a purpose-built multi-hop benchmark: each validation
+question supplies ten visible candidate Wikipedia passages and identifies the
+supporting article titles. This repository uses the support titles only to
+calculate metrics. The retrieval-time graph is built solely when one candidate
+passage body explicitly mentions another candidate title.
+
+```bash
+scripts/download_hotpotqa_distractor.sh
+.venv/bin/python -m backend.evals.hotpotqa_title_graph \
+  --output backend/evals/reports/hotpotqa_title_graph.json
+```
+
+The downloader fetches a deterministic, public validation slice (offset 0,
+length 100) through the local proxy and keeps it under the gitignored benchmark
+directory. The experiment always returns exactly five final passages and
+compares three policies: BM25 only, a fixed Top-2-seed/two-hop BFS policy with
+no rerank, and the same BFS pool with a documented lexical rerank. Each JSON
+row records candidate count, title-mention edge count, source origin, hop, and
+the final score. Do not claim a BFS benefit unless its delta is positive on the
+saved report; retain a negative result as an engineering finding.
+
+The first 99-question run is documented in
+[HotpotQA Title-Mention Graph Evaluation](hotpotqa-title-graph-eval-2026-08-18.md).
+It found a coverage gain from fixed traversal, while the first lightweight
+reranker almost removed that gain; the detailed limitations are part of the
+result rather than being omitted.
+
 ## Interview Boundary
 
 BEIR validates general retrieval plumbing, not Mini-OpenClaw's agent behavior
