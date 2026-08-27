@@ -9,8 +9,10 @@ export const MODEL_SETTINGS_STORAGE_KEY = "mini-openclaw-model-settings";
 export const defaultModelSettings: ModelSettings = {
   apiKey: "",
   baseUrl: "https://api.codexzh.com/v1",
-  model: "gpt-5.4",
+  model: "cc-gpt-5.6-terra",
 };
+
+const LEGACY_DEFAULT_MODEL = "gpt-5.4";
 
 export type ModelSettingsStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
 
@@ -20,10 +22,23 @@ function normalizeModelSettings(raw: unknown): ModelSettings {
   }
 
   const candidate = raw as Partial<Record<keyof ModelSettings, unknown>>;
+  const baseUrl = typeof candidate.baseUrl === "string" && candidate.baseUrl.trim()
+    ? candidate.baseUrl
+    : defaultModelSettings.baseUrl;
+  const model = typeof candidate.model === "string" && candidate.model.trim()
+    ? candidate.model
+    : defaultModelSettings.model;
+  const isLegacyDefault = baseUrl === defaultModelSettings.baseUrl && model === LEGACY_DEFAULT_MODEL;
+
   return {
-    apiKey: typeof candidate.apiKey === "string" ? candidate.apiKey : defaultModelSettings.apiKey,
-    baseUrl: typeof candidate.baseUrl === "string" && candidate.baseUrl.trim() ? candidate.baseUrl : defaultModelSettings.baseUrl,
-    model: typeof candidate.model === "string" && candidate.model.trim() ? candidate.model : defaultModelSettings.model,
+    // Only migrate the prior built-in provider/model pair; custom providers remain untouched.
+    apiKey: isLegacyDefault
+      ? defaultModelSettings.apiKey
+      : typeof candidate.apiKey === "string"
+        ? candidate.apiKey
+        : defaultModelSettings.apiKey,
+    baseUrl,
+    model: isLegacyDefault ? defaultModelSettings.model : model,
   };
 }
 

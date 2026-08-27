@@ -272,7 +272,7 @@ export function WorkbenchPage() {
   }
 
   useEffect(() => {
-    if (typeof window === "undefined") {
+    if (typeof window === "undefined" || !shouldPersistModelSettings(isModelSettingsHydrated)) {
       return;
     }
 
@@ -1373,7 +1373,7 @@ export function WorkbenchPage() {
                         <Input
                           className="h-11 rounded-2xl border-slate-200 bg-slate-50/80"
                           onChange={(event) => handleModelSettingChange("model", event.target.value)}
-                          placeholder="gpt-5.4"
+                          placeholder="cc-gpt-5.6-terra"
                           value={modelSettings.model}
                         />
                       </div>

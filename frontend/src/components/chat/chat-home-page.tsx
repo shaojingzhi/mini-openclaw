@@ -215,7 +215,7 @@ export function ChatHomePage() {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [activeSessionId, setActiveSessionId] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>(starterMessages);
-  const [draft, setDraft] = useState("Summarize Mini-OpenClaw as an AI agent project in 4 bullets.");
+  const [draft, setDraft] = useState("");
   const [isLoadingSession, setIsLoadingSession] = useState(true);
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamError, setStreamError] = useState<string | null>(null);

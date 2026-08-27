@@ -29,6 +29,7 @@ from langchain.agents import create_agent
 from langchain_core.language_models import BaseChatModel
 from langchain_openai import ChatOpenAI
 
+from backend.agents.handoff_compat import compatibility_decision_prompt
 from backend.agents.profiles import DEFAULT_AGENT_ID, AgentProfile, get_agent_profile
 from backend.prompt_assembler import build_system_prompt
 from backend.settings import get_settings
@@ -64,6 +65,50 @@ def _build_model(
     if resolved_base_url:
         kwargs["base_url"] = resolved_base_url
     return ChatOpenAI(**kwargs)
+
+
+def build_handoff_compatibility_model(
+    *,
+    api_key: str | None = None,
+    base_url: str | None = None,
+    model_name: str | None = None,
+) -> BaseChatModel:
+    """Build the no-tools model used for explicit collaboration requests.
+
+    Keeping this request unbound avoids a broken gateway's tool-call result
+    protocol. The response is still validated before it can affect routing.
+    """
+    return _build_model(api_key=api_key, base_url=base_url, model=model_name)
+
+
+async def decide_compatibility_handoff(
+    *,
+    api_key: str | None,
+    base_url: str | None,
+    model_name: str | None,
+    profile: AgentProfile,
+    message: str,
+) -> str:
+    """Request one JSON coordination decision without registering any tools."""
+    model = build_handoff_compatibility_model(
+        api_key=api_key,
+        base_url=base_url,
+        model_name=model_name,
+    )
+    response = await model.ainvoke(
+        [
+            {
+                "role": "system",
+                "content": "Return only the requested JSON coordination decision.",
+            },
+            {
+                "role": "user",
+                "content": compatibility_decision_prompt(profile=profile, message=message),
+            },
+        ]
+    )
+    content = getattr(response, "content", "")
+    return content if isinstance(content, str) else ""
 
 
 def build_agent(

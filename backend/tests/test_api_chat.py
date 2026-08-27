@@ -127,6 +127,8 @@ class ApiChatTests(unittest.TestCase):
             traces_dir = tmp_path / "traces"
             data_users_dir = tmp_path / "users"
             with patch.object(ss_mod, "SESSIONS_DIR", tmp_path), patch.object(us_mod, "DATA_USERS_DIR", data_users_dir), patch.object(tr_mod, "TRACES_DIR", traces_dir), patch.object(
+                ps_mod, "MEMORY_DIR", tmp_path / "memory"
+            ), patch.object(
                 app_mod, "build_agent", return_value=agent
             ):
                 client = TestClient(app_mod.app)
@@ -360,6 +362,7 @@ class ApiChatTests(unittest.TestCase):
             1,
         )
         self.assertIn("not a user message", target_messages[0]["content"])
+        self.assertIn("handoff has already completed", target_messages[0]["content"])
         envelope = json.loads(target_messages[0]["content"].splitlines()[-1])
         self.assertEqual(envelope["evidence"][0]["tool_name"], "search_knowledge_base")
         self.assertEqual(len(envelope["evidence"][0]["content"]), 1_000)
@@ -375,6 +378,42 @@ class ApiChatTests(unittest.TestCase):
         self.assertEqual(trace["handoff_count"], 1)
         self.assertIn("handoff_requested", [event["kind"] for event in trace["events"]])
         self.assertIn("handoff_completed", [event["kind"] for event in trace["events"]])
+
+    def test_explicit_collaboration_uses_compatibility_handoff_without_tool_calling(self) -> None:
+        target_agent = _InvokeAgent("砥石已接手并完成审查。")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            with patch.object(ss_mod, "SESSIONS_DIR", tmp_path / "sessions"), patch.object(
+                us_mod, "DATA_USERS_DIR", tmp_path / "users"
+            ), patch.object(tr_mod, "TRACES_DIR", tmp_path / "traces"), patch.object(
+                app_mod,
+                "decide_compatibility_handoff",
+                return_value=(
+                    '{"handoff": true, "target_agent_id": "whetstone", '
+                    '"task": "Review the current request.", '
+                    '"reason": "The user explicitly asked to invite a teammate."}'
+                ),
+            ), patch.object(app_mod, "build_agent", return_value=target_agent) as build_agent:
+                response = TestClient(app_mod.app).post(
+                    "/api/chat",
+                    json={
+                        "message": "帮我把另外两个小伙伴叫出来好不好",
+                        "session_id": "main",
+                        "stream": False,
+                    },
+                )
+                trace = json.loads(next((tmp_path / "traces").glob("*.json")).read_text(encoding="utf-8"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["agent"]["agent_id"], "whetstone")
+        self.assertEqual(response.json()["handoff"]["trigger"], "structured_text_compat")
+        self.assertEqual(build_agent.call_args.kwargs["agent_profile"].agent_id, "whetstone")
+        self.assertFalse(build_agent.call_args.kwargs["allow_handoff"])
+        requested = next(event for event in trace["events"] if event["kind"] == "handoff_requested")
+        self.assertEqual(requested["payload"]["trigger"], "structured_text_compat")
+        self.assertEqual(requested["payload"]["evidence_count"], 0)
+        self.assertFalse(trace["tool_calls"])
 
     def test_streaming_handoff_hides_host_draft(self) -> None:
         source_agent = _FinalStreamingAgent("host draft", "verified streaming evidence")
@@ -425,6 +464,37 @@ class ApiChatTests(unittest.TestCase):
         handoff_id = persisted[-1]["handoff_id"]
         self.assertEqual(envelope["handoff_id"], handoff_id)
         self.assertEqual(trace["last_handoff_id"], handoff_id)
+
+    def test_streaming_explicit_collaboration_emits_compatibility_handoff(self) -> None:
+        target_agent = _FinalStreamingAgent("火花来补充一个方案。")
+
+        async def compatibility_request(*args, **kwargs):
+            return {
+                "from_agent_id": "lighthouse",
+                "to_agent_id": "spark",
+                "task": "Offer one alternative.",
+                "reason": "The user explicitly requested another perspective.",
+                "trigger": "structured_text_compat",
+            }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            with patch.object(ss_mod, "SESSIONS_DIR", tmp_path / "sessions"), patch.object(
+                us_mod, "DATA_USERS_DIR", tmp_path / "users"
+            ), patch.object(tr_mod, "TRACES_DIR", tmp_path / "traces"), patch.object(
+                app_mod, "_maybe_request_compatibility_handoff", side_effect=compatibility_request
+            ), patch.object(app_mod, "build_agent", return_value=target_agent):
+                response = TestClient(app_mod.app).post(
+                    "/api/chat",
+                    json={"message": "帮我把小伙伴叫出来", "session_id": "main", "stream": True},
+                )
+                trace = json.loads(next((tmp_path / "traces").glob("*.json")).read_text(encoding="utf-8"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("event: handoff", response.text)
+        self.assertIn('"trigger": "structured_text_compat"', response.text)
+        self.assertIn("火花来补充一个方案。", response.text)
+        self.assertEqual(trace["handoff_count"], 1)
 
     def test_handoff_excludes_private_tool_evidence(self) -> None:
         handoff = app_mod._prepare_handoff(
