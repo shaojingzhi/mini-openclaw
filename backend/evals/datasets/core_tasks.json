@@ -1,0 +1,218 @@
+[
+  {
+    "id": "eval-001",
+    "category": "file_reading",
+    "prompt": "Read the current SOUL.md file and summarize the persona in one sentence.",
+    "expected": "Summarizes the default persona from SOUL.md.",
+    "tags": ["workspace", "summary"],
+    "required_tools": ["read_file"]
+  },
+  {
+    "id": "eval-002",
+    "category": "file_reading",
+    "prompt": "Inspect IDENTITY.md and list the five core tools mentioned there.",
+    "expected": "Lists the five core tools without inventing new ones.",
+    "tags": ["workspace", "tools"],
+    "required_tools": ["read_file"]
+  },
+  {
+    "id": "eval-003",
+    "category": "file_reading",
+    "prompt": "Open AGENTS.md and explain the skill protocol in plain Chinese.",
+    "expected": "Explains when to load and use skills based on AGENTS.md.",
+    "tags": ["workspace", "skills"],
+    "required_tools": ["read_file"]
+  },
+  {
+    "id": "eval-004",
+    "category": "file_reading",
+    "prompt": "Read MEMORY.md and extract any stored long-term user preferences.",
+    "expected": "Reports memory contents accurately or says none are stored yet.",
+    "tags": ["memory"],
+    "required_tools": ["read_file"]
+  },
+  {
+    "id": "eval-005",
+    "category": "skills",
+    "prompt": "Find the get_weather skill and explain which APIs it recommends.",
+    "expected": "Mentions wttr.in and the Open-Meteo fallback if present.",
+    "tags": ["skills", "weather"],
+    "required_tools": ["read_file"]
+  },
+  {
+    "id": "eval-006",
+    "category": "skills",
+    "prompt": "Read SKILLS_SNAPSHOT.md and tell me which skills are currently available.",
+    "expected": "Lists the discovered skills from the snapshot file.",
+    "tags": ["skills", "snapshot"],
+    "required_tools": ["read_file"]
+  },
+  {
+    "id": "eval-007",
+    "category": "terminal",
+    "prompt": "Use the terminal tool to print the backend directory name and nothing else.",
+    "expected": "Uses terminal successfully for a harmless command.",
+    "tags": ["terminal"],
+    "required_tools": ["terminal"]
+  },
+  {
+    "id": "eval-008",
+    "category": "terminal",
+    "prompt": "Use the terminal tool to count how many test files live under backend/tests.",
+    "expected": "Returns a count based on the repo state.",
+    "tags": ["terminal", "tests"],
+    "required_tools": ["terminal"]
+  },
+  {
+    "id": "eval-009",
+    "category": "knowledge_retrieval",
+    "prompt": "Search the knowledge base for notes about evaluation and summarize the guidance.",
+    "expected": "Finds the evaluation guidance document and summarizes it.",
+    "tags": ["knowledge", "evals"],
+    "required_tools": ["search_knowledge_base"]
+  },
+  {
+    "id": "eval-010",
+    "category": "knowledge_retrieval",
+    "prompt": "Search the knowledge base for Mini-OpenClaw interview positioning advice.",
+    "expected": "Returns relevant interview-positioning guidance from knowledge docs.",
+    "tags": ["knowledge", "interview"],
+    "required_tools": ["search_knowledge_base"]
+  },
+  {
+    "id": "eval-011",
+    "category": "multi_turn_context",
+    "prompt": "Remember that my preferred reply language is Chinese, then answer in that language on the next turn.",
+    "expected": "Carries user preference across turns in one session.",
+    "tags": ["memory", "session"],
+    "required_tools": [],
+    "session_id": "eval-memory-1",
+    "turns": [
+      "Remember that I prefer Chinese responses.",
+      "What language should you use for me now?"
+    ]
+  },
+  {
+    "id": "eval-012",
+    "category": "multi_turn_context",
+    "prompt": "Tell the agent a project codename and ask it to repeat it one turn later.",
+    "expected": "Maintains recent session context over two turns.",
+    "tags": ["session", "context"],
+    "required_tools": [],
+    "session_id": "eval-memory-2",
+    "turns": [
+      "The codename is Ralph Beacon.",
+      "What codename did I just give you?"
+    ]
+  },
+  {
+    "id": "eval-013",
+    "category": "file_reading",
+    "prompt": "Open USER.md and say whether the user profile template has been filled in.",
+    "expected": "Recognizes an empty or populated user profile without guessing.",
+    "tags": ["workspace", "user-profile"],
+    "required_tools": ["read_file"]
+  },
+  {
+    "id": "eval-014",
+    "category": "skills",
+    "prompt": "Find the weather skill and describe how python_repl is supposed to be used with it.",
+    "expected": "Explains that python_repl parses fetched JSON for weather responses.",
+    "tags": ["skills", "python_repl"],
+    "required_tools": ["read_file"]
+  },
+  {
+    "id": "eval-015",
+    "category": "terminal",
+    "prompt": "Use the terminal tool to show whether backend/evals exists.",
+    "expected": "Verifies the eval directory with a safe shell command.",
+    "tags": ["terminal", "evals"],
+    "required_tools": ["terminal"]
+  },
+  {
+    "id": "eval-016",
+    "category": "knowledge_retrieval",
+    "prompt": "Retrieve knowledge about why Mini-OpenClaw should be measurable and explain it briefly.",
+    "expected": "Finds notes about measurable agent quality.",
+    "tags": ["knowledge", "quality"],
+    "required_tools": ["search_knowledge_base"]
+  },
+  {
+    "id": "eval-017",
+    "category": "file_reading",
+    "prompt": "Read backend/app.py and identify the default backend port.",
+    "expected": "Finds that the backend runs on port 8002 from the documented command.",
+    "tags": ["code", "backend"],
+    "required_tools": ["read_file"]
+  },
+  {
+    "id": "eval-018",
+    "category": "skills",
+    "prompt": "Explain how the skill system discovers available skills at startup.",
+    "expected": "Describes the SKILL.md scan and snapshot generation flow.",
+    "tags": ["skills", "bootstrap"],
+    "required_tools": ["read_file"]
+  },
+  {
+    "id": "eval-019",
+    "category": "multi_turn_context",
+    "prompt": "Ask the agent to remember a short preference and then recall it after an unrelated question.",
+    "expected": "Keeps short-term context inside one session.",
+    "tags": ["session", "context"],
+    "required_tools": [],
+    "session_id": "eval-memory-3",
+    "turns": [
+      "Please remember that my favorite section is the trace panel.",
+      "Thanks. Also, what does the read_file tool do?",
+      "Now tell me my favorite section again."
+    ]
+  },
+  {
+    "id": "eval-020",
+    "category": "knowledge_retrieval",
+    "prompt": "Search for notes about interview-facing value and summarize the project positioning.",
+    "expected": "Summarizes resume/interview value from local knowledge.",
+    "tags": ["knowledge", "resume"],
+    "required_tools": ["search_knowledge_base"]
+  },
+  {
+    "id": "eval-021",
+    "category": "graph_retrieval",
+    "prompt": "Use graph-assisted knowledge retrieval to connect Mini-OpenClaw's eval notes with the interview demo pack, then explain why measurability makes the project stronger for an AI agent interview.",
+    "expected": "Connects evaluation guidance with interview positioning instead of summarizing only one direct document.",
+    "tags": ["knowledge", "graph_retrieval", "multi_hop", "interview", "evals"],
+    "required_tools": ["search_knowledge_base"]
+  },
+  {
+    "id": "eval-022",
+    "category": "graph_retrieval",
+    "prompt": "Use graph-assisted retrieval to find how interview skills, the prompt sheet, and runtime diagnostics support one coherent hiring demo.",
+    "expected": "Links interview skills, INTERVIEW_DEMO.md, and diagnostics into a single demo narrative.",
+    "tags": ["knowledge", "graph_retrieval", "multi_hop", "skills", "diagnostics"],
+    "required_tools": ["search_knowledge_base"]
+  },
+  {
+    "id": "eval-023",
+    "category": "graph_retrieval",
+    "prompt": "Use graph-assisted retrieval to explain when file-based memory should remain the source of truth and when retrieval or graph expansion is helpful.",
+    "expected": "Distinguishes transparent file memory from retrieval and graph-assisted expansion with concrete tradeoffs.",
+    "tags": ["knowledge", "graph_retrieval", "multi_hop", "memory", "retrieval"],
+    "required_tools": ["search_knowledge_base"]
+  },
+  {
+    "id": "eval-024",
+    "category": "graph_retrieval",
+    "prompt": "Use graph-assisted retrieval to identify which project surfaces would help debug a failed knowledge-retrieval answer in a demo.",
+    "expected": "Connects failure handling, traces, graph diagnostics, and relevant docs instead of naming only one artifact.",
+    "tags": ["knowledge", "graph_retrieval", "multi_hop", "failure_handling", "traces"],
+    "required_tools": ["search_knowledge_base"]
+  },
+  {
+    "id": "eval-025",
+    "category": "graph_retrieval",
+    "prompt": "Use graph-assisted retrieval to produce a concise Graph-RAG-inspired interview explanation that avoids claiming full community-summarization GraphRAG.",
+    "expected": "Explains graph-assisted retrieval as lightweight, inspectable, and limited, with clear non-overselling language.",
+    "tags": ["knowledge", "graph_retrieval", "multi_hop", "graph_assisted", "interview"],
+    "required_tools": ["search_knowledge_base"]
+  }
+]

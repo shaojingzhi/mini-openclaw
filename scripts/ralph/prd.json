@@ -1,7 +1,7 @@
 {
   "project": "Mini-OpenClaw",
   "branchName": "ralph/mini-openclaw",
-  "description": "Mini-OpenClaw - A lightweight, transparent AI Agent system built with Python (FastAPI + LangChain 1.x create_agent) and Next.js, featuring file-first memory, instruction-following Agent Skills, and an IDE-style three-column UI.",
+  "description": "Mini-OpenClaw - A lightweight, transparent AI Agent system built with Python (FastAPI + LangChain 1.x create_agent) and Next.js, featuring file-first memory, instruction-following Agent Skills, and an IDE-style three-column UI. Extended with evaluation, observability, isolation, failure-handling, and vertical-demo improvements.",
   "userStories": [
     {
       "id": "US-001",
@@ -16,7 +16,7 @@
         "Typecheck passes"
       ],
       "priority": 1,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
@@ -30,8 +30,8 @@
         "Typecheck passes"
       ],
       "priority": 2,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Pinned all 13 requested deps + uvicorn[standard]. Verified `pip install --dry-run -r backend/requirements.txt` resolves cleanly in a fresh venv on Python 3.14 (no conflicts/incompatible markers). LangChain pinned to 1.3.4 (latest 1.x stable)."
     },
     {
       "id": "US-003",
@@ -47,8 +47,8 @@
         "Typecheck passes"
       ],
       "priority": 3,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Seeded SOUL.md, IDENTITY.md, USER.md, AGENTS.md under backend/workspace/ and MEMORY.md under backend/memory/. AGENTS.md SKILL PROTOCOL block is verbatim from PRD §4.3; added a concrete Memory Protocol section (PRD left this as `...`). Removed backend/workspace/.gitkeep since the dir now holds real files. SKILLS_SNAPSHOT.md intentionally NOT created — that is US-009."
     },
     {
       "id": "US-004",
@@ -64,8 +64,8 @@
         "Typecheck passes"
       ],
       "priority": 4,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented backend/tools/terminal.py wrapping langchain_community.tools.ShellTool. BashProcess has no cwd param, so root_dir is enforced by prefixing each command with `cd <project-root> && (...)` before delegating to _SHELL_TOOL.process.run. Blacklist is a tuple of compiled regexes covering rm -rf /, rm -rf ~, fork bomb, mkfs, dd if=. Tests in backend/tests/test_terminal.py — 4 unittest cases (blacklist detection truth-table + allowed-command output + refusal string). All pass; py_compile clean."
     },
     {
       "id": "US-005",
@@ -80,8 +80,8 @@
         "Typecheck passes"
       ],
       "priority": 5,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented backend/tools/python_repl.py wrapping langchain_experimental.tools.PythonREPLTool as a `@tool(\"python_repl\")` StructuredTool. The underlying tool's `invoke` returns trailing-newline output (`'4\\n'` for `print(2+2)`); we `.rstrip()` it so the literal acceptance criterion `returns '4'` holds. Re-exported from backend/tools/__init__.py. Tests in backend/tests/test_python_repl.py — 3 unittest cases: print-2+2, arithmetic chain, `import math` (sqrt + floor). All 7 backend tests still pass."
     },
     {
       "id": "US-006",
@@ -97,8 +97,8 @@
         "Typecheck passes"
       ],
       "priority": 6,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented backend/tools/fetch_url.py as a `@tool(\"fetch_url\")` wrapping langchain_community RequestsGetTool with a BeautifulSoup-strip + html2text post-processor (script/style decomposed, body_width=0, trailing whitespace stripped). Required `allow_dangerous_requests=True` on RequestsGetTool init (otherwise the base class refuses to construct). Re-exported from backend/tools/__init__.py. 3 unittest cases in backend/tests/test_fetch_url.py: script/style stripping, Markdown structure preserved (h1/link/list bullets), and the full fetch_url path with `_REQUESTS_TOOL` stubbed at module scope. All 10 backend tests pass."
     },
     {
       "id": "US-007",
@@ -114,8 +114,8 @@
         "Typecheck passes"
       ],
       "priority": 7,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented backend/tools/read_file.py as a `@tool(\"read_file\")` wrapping langchain_community.tools.file_management.ReadFileTool with root_dir set to PROJECT_ROOT (Path(__file__).resolve().parents[2]). The underlying tool's BaseFileToolMixin.get_relative_path() already raises FileValidationError for any user_path whose `(root / user_path).resolve()` falls outside root — both absolute paths like `/etc/passwd` (which discards root via Path's `/` operator) and `..` traversal hit the same denial, returning the fixed `Access denied to file_path: ...` template. Re-exported from backend/tools/__init__.py. 4 unittest cases in backend/tests/test_read_file.py: in-root success reading backend/app.py, absolute-path denial, ../.. traversal denial, missing-file-inside-root distinct-error. All 14 backend tests pass."
     },
     {
       "id": "US-008",
@@ -132,8 +132,8 @@
         "Typecheck passes"
       ],
       "priority": 8,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented backend/tools/search_knowledge_base.py as a `@tool(\"search_knowledge_base\")` that builds a QueryFusionRetriever combining BM25Retriever (llama-index-retrievers-bm25 0.7.x) and VectorIndexRetriever over `backend/knowledge/`. The VectorStoreIndex is persisted under `backend/storage/` and reloaded from `docstore.json` on subsequent calls. `_configure_settings()` sets `Settings.llm = MockLLM()` and falls back to `MockEmbedding(embed_dim=384)` when `OPENAI_API_KEY` is unset so the tool never crashes from missing credentials — BM25 still does real keyword retrieval. QueryFusionRetriever uses `num_queries=1` to bypass LLM-based query rewriting and `mode='reciprocal_rerank'`. Empty/missing knowledge folder returns the fixed `EMPTY_KB_MESSAGE` string. Re-exported from `backend/tools/__init__.py` (`__all__` resorted: fetch_url, python_repl, read_file, search_knowledge_base, terminal). Added `backend/knowledge/.gitkeep` so the layout matches the PRD; `backend/storage/` was already gitignored. 4 unittest cases in backend/tests/test_search_knowledge_base.py: empty-dir, missing-dir, keyword retrieval of a seeded markdown file, and persisted-storage check. All 18 backend tests pass."
     },
     {
       "id": "US-009",
@@ -150,8 +150,8 @@
         "Typecheck passes"
       ],
       "priority": 9,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented backend/skills_loader.py with `build_skills_snapshot(skills_dir=None, *, write=True, snapshot_path=None) -> str`. Scans `skills_dir/*/SKILL.md` (sorted), parses YAML frontmatter via `yaml.safe_load` (PyYAML is a stable transitive of langchain-core / langchain-community / langchain-classic / llama-index-core — not pinned directly to avoid expanding US-002's dep set). `_FRONTMATTER_RE = r'\\A---[ \\t]*\\n(.*?)\\n---[ \\t]*(?:\\n|\\Z)'` handles both trailing-newline and EOF-terminated frontmatter blocks. `name` defaults to the skill folder name when frontmatter is missing/invalid; `description` defaults to empty string. `location` is always emitted as `./backend/skills/<folder>/SKILL.md` so the agent's `read_file` tool (root_dir=PROJECT_ROOT) can resolve it directly — even when tests pass a temp `skills_dir`. XML special chars are escaped via `xml.sax.saxutils.escape`. Missing/non-directory skills_dir returns the empty `<available_skills>\\n</available_skills>` wrapper instead of crashing (matches US-008 graceful-empty pattern). 7 unittest cases in backend/tests/test_skills_loader.py: valid frontmatter, alphabetical sort across multiple skills, empty dir, missing dir, missing frontmatter falls back to folder name, XML-escaping of `<` `&` `\"`, and write-to-disk persistence. All 25 backend tests pass. Seeded `backend/workspace/SKILLS_SNAPSHOT.md` with the (currently empty) wrapper by running the bootstrap once."
     },
     {
       "id": "US-010",
@@ -165,8 +165,8 @@
         "Typecheck passes"
       ],
       "priority": 10,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Created backend/skills/get_weather/SKILL.md with YAML frontmatter (name: get_weather, description in Chinese) and a body documenting two no-API-key flows: wttr.in (?format=j1) primary + Open-Meteo fallback (geocoding + forecast). Body explicitly instructs the agent to fetch_url first, then python_repl-parse the JSON — never fabricate data. Removed backend/skills/.gitkeep (real content now present, per US-001 convention). Re-ran `python -c 'from backend.skills_loader import build_skills_snapshot; print(build_skills_snapshot())'` — bootstrap picks up the skill and writes backend/workspace/SKILLS_SNAPSHOT.md with the get_weather <skill> entry. Full backend test suite still 25/25 OK (skills_loader's existing tests already cover the discovery path; no new tests required — US-010 is content-only)."
     },
     {
       "id": "US-011",
@@ -182,8 +182,8 @@
         "Typecheck passes"
       ],
       "priority": 11,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented backend/prompt_assembler.py with `build_system_prompt() -> str`. Reads the six source files in the PRD §4.2 order (SKILLS_SNAPSHOT → SOUL → IDENTITY → USER → AGENTS → MEMORY) from `WORKSPACE_DIR` / `MEMORY_DIR` module-level constants, separates each with a `# === <name> ===` header, and truncates any single file longer than `MAX_FILE_CHARS = 20_000` by slicing to the limit and appending the literal `...[truncated]` marker. Missing files fall through to a `(file not found)` placeholder instead of crashing — matches the graceful-empty pattern from US-008/US-009. Module-level constants (not default args) are used so `patch.object(pa_mod, 'WORKSPACE_DIR', ...)` works in tests (Codebase Patterns note from US-008 applied). 5 unittest cases in backend/tests/test_prompt_assembler.py: required-order concatenation, oversized-file truncation marker, short-files-no-marker, missing-file placeholder, smoke test against the real committed files. All 30 backend tests pass."
     },
     {
       "id": "US-012",
@@ -200,8 +200,8 @@
         "Typecheck passes"
       ],
       "priority": 12,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented backend/graph/agent.py exporting `build_agent(model=None) -> CompiledStateGraph` that calls `from langchain.agents import create_agent` (NOT AgentExecutor / create_react_agent) with all five core tools (terminal, python_repl, fetch_url, read_file, search_knowledge_base) and the assembled system prompt from `backend.prompt_assembler.build_system_prompt()`. Model client is `langchain_openai.ChatOpenAI` constructed from env vars: OPENAI_API_KEY (defaults to 'EMPTY' so LM Studio / local servers work out of the box), OPENAI_BASE_URL (passed only when set so the upstream default is honored), OPENAI_MODEL (defaults to 'gpt-4o-mini'). `build_agent` accepts an optional `model` arg for test injection. Smoke test in backend/tests/test_agent.py uses a subclass of GenericFakeChatModel that overrides `bind_tools` to return self (the base class raises NotImplementedError; create_agent calls bind_tools to register the tool schema). 3 unittest cases: say-hello returns non-empty reply, all 5 core tool names registered, agent compiles without provider. All 33 backend tests pass."
     },
     {
       "id": "US-013",
@@ -217,8 +217,8 @@
         "Typecheck passes"
       ],
       "priority": 13,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented backend/sessions_store.py exposing `load_session(name) -> list[dict[str, Any]]` and `append_message(name, message) -> list[dict[str, Any]]`. Sessions stored at backend/sessions/{name}.json as JSON arrays. Loading non-existent sessions returns [] (no exception). append_message lazily creates SESSIONS_DIR + the JSON file on first call and writes atomically via .tmp + Path.replace so a crash mid-write can't corrupt an existing session. SESSIONS_DIR is a module-level constant (not a default arg) so tests can patch.object it (per Codebase Patterns US-008/US-011). Session names restricted to `[A-Za-z0-9._-]+` (rejects `..`, `/`, empty, etc.) — prevents path traversal out of SESSIONS_DIR; ALLOWED_ROLES = ('user', 'assistant', 'tool'). Tests in backend/tests/test_sessions_store.py — 11 unittest cases across LoadSessionTests (missing/existing/corrupt-JSON/empty-file), AppendMessageTests (first-call file creation, multi-role extend, Unicode + ordering roundtrip with ensure_ascii=False, role rejection, non-dict rejection), SessionNameValidationTests (traversal rejection + typical-name acceptance). All 44 backend tests pass."
     },
     {
       "id": "US-014",
@@ -236,8 +236,8 @@
         "Typecheck passes"
       ],
       "priority": 14,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Added POST /api/chat in backend/app.py with ChatRequest parsing, SSE streaming via EventSourceResponse when stream=true, and JSON {reply} fallback when stream=false. The endpoint persists the incoming user message and final assistant message through sessions_store, and normalizes LangChain streaming into thought/tool_call/tool_result/final SSE events while also tolerating raw create_agent astream_events(v2) event names. Added backend/tests/test_api_chat.py with FastAPI TestClient coverage for both stream=true and stream=false against mocked agents. Full backend suite now passes 46/46."
     },
     {
       "id": "US-015",
@@ -253,8 +253,8 @@
         "Typecheck passes"
       ],
       "priority": 15,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Added GET /api/files and POST /api/files to backend/app.py with a strict allowlist over backend/memory, backend/workspace, and backend/skills. Path validation resolves both the requested path and each allowed root before relative_to() checks so tempdir-patched tests do not false-fail on mixed absolute/relative Paths. Added backend/tests/test_api_files.py covering allowed read, allowed write, traversal rejection, and outside-root rejection. Full backend suite now passes 49/49."
     },
     {
       "id": "US-016",
@@ -269,8 +269,8 @@
         "Typecheck passes"
       ],
       "priority": 16,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Added GET /api/sessions to backend/app.py, listing backend/sessions/*.json as {name, last_modified, message_count}. last_modified is emitted as a UTC ISO-8601 string derived from file mtime, and message_count is computed via sessions_store.load_session(name) so corrupt/missing JSON still degrades gracefully to 0/[] semantics instead of crashing the route. Added backend/tests/test_api_sessions.py covering seeded two-session listing and missing-directory empty response. Full backend suite now passes 51/51."
     },
     {
       "id": "US-017",
@@ -286,8 +286,8 @@
         "Typecheck passes"
       ],
       "priority": 17,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Scaffolded frontend/ as a Next.js 14 App Router project with strict TypeScript, Tailwind CSS, and a shadcn-compatible components.json baseline. Added base shadcn UI primitives (button/input/dropdown), lucide-react, a shared cn() helper, and a placeholder landing page in src/app/page.tsx. Verified `npm run dev --prefix frontend` starts cleanly on localhost:3000, `npm run build --prefix frontend` succeeds on Next 14.2.35, and `npm run typecheck --prefix frontend` passes."
     },
     {
       "id": "US-018",
@@ -301,8 +301,8 @@
         "Typecheck passes"
       ],
       "priority": 18,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Created frontend/src/lib/api.ts exporting typed `streamChat`, `getFile`, `saveFile`, and `listSessions` helpers. Base URL reads from NEXT_PUBLIC_API_URL with a localhost:8002 default. `streamChat` posts to /api/chat with stream=true, incrementally parses SSE blocks from fetch() ReadableStream output, and yields the four typed event variants (thought/tool_call/tool_result/final) without using `any`. Verified `npm run typecheck --prefix frontend` and `npm run build --prefix frontend` both pass."
     },
     {
       "id": "US-019",
@@ -317,7 +317,7 @@
         "Verify in browser using dev-browser skill"
       ],
       "priority": 19,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
@@ -327,13 +327,12 @@
       "acceptanceCriteria": [
         "Fixed top navigation bar, semi-transparent with backdrop-blur",
         "Center-left shows `mini OpenClaw` brand text",
-        "Right side shows `赋范空间` linking to https://fufan.ai (opens in new tab)",
         "Accent color is Klein Blue (or vibrant orange) used for the brand text",
         "Typecheck passes",
         "Verify in browser using dev-browser skill"
       ],
       "priority": 20,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
@@ -349,7 +348,7 @@
         "Verify in browser using dev-browser skill"
       ],
       "priority": 21,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
@@ -367,7 +366,7 @@
         "Verify in browser using dev-browser skill"
       ],
       "priority": 22,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
@@ -385,8 +384,305 @@
         "Verify in browser using dev-browser skill"
       ],
       "priority": 23,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Added a Monaco-based inspector in frontend/src/app/page.tsx with a dynamic ssr:false editor wrapper at frontend/src/components/monaco-markdown-editor.tsx. The panel can switch between backend/memory/MEMORY.md, backend/workspace/AGENTS.md, and backend/skills/get_weather/SKILL.md, loads via GET /api/files, saves via POST /api/files, shows Sonner success/error toasts, and supports Cmd/Ctrl+S. Verified with npm run typecheck --prefix frontend and npm run build --prefix frontend."
+    },
+    {
+      "id": "US-101",
+      "title": "Add offline eval runner and 20-task seed dataset",
+      "description": "As a developer, I need a one-command offline evaluation runner plus a seed dataset so Mini-OpenClaw can quantify baseline task completion instead of relying on screenshots.",
+      "acceptanceCriteria": [
+        "Create `backend/evals/` with a reusable runner module and dataset loader",
+        "Seed at least 20 evaluation tasks under `backend/evals/datasets/`",
+        "Tasks cover file reading, skill inspection, terminal usage, multi-turn context, and knowledge retrieval",
+        "Runner supports `python -m backend.evals.runner --dataset ... --output ...`",
+        "Generated JSON report includes `task_success_rate`, `tool_call_success_rate`, `average_latency_ms`, `average_tool_calls`, and `failure_category_distribution`",
+        "Add unit tests for dataset loading, metrics aggregation, and report writing",
+        "Tests pass"
+      ],
+      "priority": 1,
+      "passes": true,
+      "notes": "Implemented a JSON-backed offline eval runner under backend/evals with a 20-task seed dataset covering file reading, skills, terminal, multi-turn context, and knowledge retrieval. Added unit tests for dataset loading, metrics aggregation, and report writing. The CLI now supports `python -m backend.evals.runner --dataset ... --output ...` and emits a JSON report with task success rate, tool-call success rate, latency, tool usage, and failure-category distribution."
+    },
+    {
+      "id": "US-102",
+      "title": "Add ablation profiles and Markdown eval report",
+      "description": "As a developer, I need self-comparison baselines so the evaluation suite can prove whether memory, skills, and retrieval improve outcomes.",
+      "acceptanceCriteria": [
+        "Add eval profiles for baseline, no_memory, no_skills, and no_retrieval",
+        "Runner can execute multiple profiles in one invocation",
+        "Generate a Markdown summary beside the JSON report",
+        "Markdown report includes at least one ablation comparison table",
+        "Profile configuration is file-based and easy to extend",
+        "Add tests for profile selection and Markdown rendering",
+        "Tests pass"
+      ],
+      "priority": 2,
+      "passes": true,
+      "notes": "Added file-based eval profiles in backend/evals/profiles.json for baseline, no_memory, no_skills, and no_retrieval. The runner now supports selecting multiple profiles, emits an ablation_comparison section in JSON, and writes a paired Markdown report with a profile summary table plus baseline-vs-ablation deltas."
+    },
+    {
+      "id": "US-103",
+      "title": "Record structured chat traces to local JSON logs",
+      "description": "As a developer, I need every chat run to emit a trace so failures and latency can be diagnosed later.",
+      "acceptanceCriteria": [
+        "Each `/api/chat` request gets a unique `trace_id`",
+        "Persist traces under `backend/data/traces/` as JSON files",
+        "Each trace records `session_id`, `start_time`, `end_time`, `latency_ms`, `model_name`, `tool_calls`, `tool_failures`, `final_status`, and `token_usage` when available",
+        "Streaming and non-streaming chat flows both write traces",
+        "Add tests for successful and failed trace persistence",
+        "Tests pass"
+      ],
+      "priority": 3,
+      "passes": true,
+      "notes": "Added local JSON trace persistence under backend/data/traces via backend/traces_store.py. Both streaming and non-streaming /api/chat flows now generate a trace_id, record structured events, capture tool calls and agent_error failures, store latency/model/final_status metadata, and persist the trace to disk. Added unit/integration coverage for trace roundtrip, successful chat traces, and failure traces."
+    },
+    {
+      "id": "US-104",
+      "title": "Expose trace list and detail APIs",
+      "description": "As the frontend, I need to query recent traces so the app can surface runtime diagnostics.",
+      "acceptanceCriteria": [
+        "Add `GET /api/traces` returning recent trace summaries",
+        "Add `GET /api/traces/{trace_id}` returning the full trace payload",
+        "Trace summary includes `trace_id`, `session_id`, `latency_ms`, `final_status`, and `created_at`",
+        "Missing traces return HTTP 404",
+        "Add integration tests for list, detail, and missing-trace cases",
+        "Tests pass"
+      ],
+      "priority": 4,
+      "passes": true,
+      "notes": "Added GET /api/traces and GET /api/traces/{trace_id} backed by local JSON files in backend/data/traces. The summary endpoint returns trace_id, session_id, latency_ms, final_status, and created_at; the detail endpoint returns the full persisted trace payload and 404s cleanly for missing traces. Added integration coverage for list, detail, and missing-trace cases."
+    },
+    {
+      "id": "US-105",
+      "title": "Add frontend trace panel for sessions",
+      "description": "As a user, I need a lightweight trace view so I can inspect tool calls, failures, and latency after each conversation.",
+      "acceptanceCriteria": [
+        "Frontend loads trace summaries for the active session",
+        "A right-side trace panel shows status, latency, tool calls, and failures",
+        "Selecting a trace reveals the full ordered event list",
+        "Failed traces are visually distinct from successful traces",
+        "Manual browser verification covers the main trace flow",
+        "Relevant frontend checks pass"
+      ],
+      "priority": 5,
+      "passes": true,
+      "notes": "Added a frontend runtime diagnostics panel wired to the new /api/traces endpoints. The UI now loads trace summaries, fetches trace details on selection, displays status/latency/model/event payloads, and was manually verified in the in-app browser after restarting the local dev services."
+    },
+    {
+      "id": "US-106",
+      "title": "Isolate sessions, memory, and workspace by user_id",
+      "description": "As a product-minded developer, I need per-user storage boundaries so different users cannot see each other's local state.",
+      "acceptanceCriteria": [
+        "Introduce `user_id` support via `X-User-ID` header plus frontend override",
+        "Move stateful files under `backend/data/users/{user_id}/...`",
+        "Sessions, memory, and workspace paths are user-scoped",
+        "Default anonymous user still works without configuration",
+        "Add tests proving user A and user B are physically isolated",
+        "Tests pass"
+      ],
+      "priority": 6,
+      "passes": true,
+      "notes": "Added minimal user isolation via the X-User-ID header. Chat session storage now resolves to backend/data/users/{user_id}/sessions, while file access resolves user-specific memory/workspace roots under backend/data/users/{user_id}/... with backend/skills remaining shared. Added integration tests proving separate users do not share session JSON or workspace file views."
+    },
+    {
+      "id": "US-107",
+      "title": "Serialize per-user writes with async locks",
+      "description": "As a developer, I need to prevent concurrent writes from corrupting the same user's files.",
+      "acceptanceCriteria": [
+        "Add an in-process async lock registry keyed by `user_id`",
+        "Session writes and mutable file writes for the same user are serialized",
+        "Different users can still proceed concurrently",
+        "Add tests covering concurrent same-user and cross-user writes",
+        "Tests pass"
+      ],
+      "priority": 7,
+      "passes": true,
+      "notes": "Added `backend/user_locks.py` with an in-process async lock registry keyed by `user_id`, then routed chat session appends and mutable file saves through those locks in `backend/app.py`. Same-user writes now serialize while different users still run concurrently. Kept anonymous traffic compatible with the legacy shared file/session paths, and added focused concurrency tests for same-user session writes, same-user file writes, and cross-user parallelism."
+    },
+    {
+      "id": "US-108",
+      "title": "Classify runtime failures and return friendly fallbacks",
+      "description": "As a user, I need the system to explain failures instead of silently breaking.",
+      "acceptanceCriteria": [
+        "Implement error categories: `tool_timeout`, `tool_invalid_input`, `model_invalid_format`, `memory_read_failure`, `knowledge_retrieval_failure`, `max_iterations_exceeded`",
+        "Attach the category to trace records and API error payloads",
+        "Add retry / fallback helpers for recoverable cases",
+        "Frontend shows a user-friendly failure state instead of hanging",
+        "Add tests for at least three distinct categories",
+        "Tests pass"
+      ],
+      "priority": 8,
+      "passes": true,
+      "notes": "Added `backend/runtime_errors.py` to classify runtime failures into the requested categories and decide whether a one-shot retry is safe. `/api/chat` now attaches categorized failure metadata to trace records and returns friendly JSON/SSE fallbacks instead of opaque errors, while traces persist `error_category`, `friendly_message`, `recoverable`, and `retry_count`. The frontend API layer now surfaces friendly backend error text, and the diagnostics panel shows error category, retries, and fallback messaging."
+    },
+    {
+      "id": "US-109",
+      "title": "Expand boundary tests for failure scenarios",
+      "description": "As a maintainer, I need regression coverage for the most common failure edges before adding more features.",
+      "acceptanceCriteria": [
+        "Add tests for invalid shell commands, missing files, long-text parse failure handling, and empty retrieval results",
+        "At least one API-level test asserts the frontend-visible payload is non-silent on failure",
+        "Document the failure matrix in the repo",
+        "Tests pass"
+      ],
+      "priority": 9,
+      "passes": true,
+      "notes": "Expanded failure-boundary coverage across shell, file, fetch, retrieval, and API surfaces. Added tests for invalid shell commands, missing allowed files, long-text parse failure handling in `fetch_url`, and empty retrieval results in `search_knowledge_base`; also documented the repo-level failure matrix in `docs/failure-matrix.md`. The search tool now falls back to mock embeddings if the optional OpenAI embedding package is unavailable, which also makes the backend test suite fully green."
+    },
+    {
+      "id": "US-110",
+      "title": "Ship an interview-assistant vertical demo pack",
+      "description": "As a hiring-facing developer, I need one concrete vertical scenario so the project demonstrates real utility beyond a generic chat shell.",
+      "acceptanceCriteria": [
+        "Add a focused knowledge pack for interview Q&A under `backend/knowledge/`",
+        "Add one to two dedicated skills for interview prep",
+        "Seed at least five demo prompts or scenarios",
+        "Document the demo workflow and screenshot checklist",
+        "Frontend exposes the demo materials in a discoverable way",
+        "Relevant checks pass"
+      ],
+      "priority": 10,
+      "passes": true,
+      "notes": "Added a focused interview-prep knowledge pack under `backend/knowledge/interview/`, two dedicated interview skills, a workspace prompt sheet (`INTERVIEW_DEMO.md`), and a frontend Interview Demo prompt launcher. Also documented the demo workflow and screenshot checklist in `docs/interview-demo-pack.md`, regenerated `SKILLS_SNAPSHOT.md`, and exposed the demo assets directly in the inspector so the project can be shown as a concrete hiring-facing assistant instead of a generic chat shell."
+    },
+    {
+      "id": "US-111",
+      "title": "Build file-backed graph index for agent knowledge",
+      "description": "As a developer, I need a lightweight graph index over Mini-OpenClaw's knowledge, skills, workspace docs, and traces so graph-assisted retrieval can be implemented without adding a heavy graph database.",
+      "acceptanceCriteria": [
+        "Create a backend graph module that extracts nodes and edges from `backend/knowledge/`, `backend/skills/`, `backend/workspace/`, and trace JSON files",
+        "Persist the graph as deterministic JSON under `backend/data/graph/knowledge_graph.json`",
+        "Represent node types for document, skill, workspace_file, trace, tool, concept, and heading",
+        "Represent edge types including contains, references, uses_tool, failed_at, and mentions",
+        "Provide a public rebuild function and a CLI entry point for regenerating the graph",
+        "Gracefully handle missing or empty source directories",
+        "Add unit tests for extraction, deterministic persistence, and empty-source behavior",
+        "Tests pass"
+      ],
+      "priority": 11,
+      "passes": true,
+      "notes": "Implemented backend.graph.index as a lightweight file-backed knowledge graph builder over knowledge, skills, workspace files, and traces. Graph JSON persists under backend/data/graph/knowledge_graph.json, with deterministic nodes/edges, a CLI entry point via python -m backend.graph.index, graceful empty-source handling, and unit tests covering extraction, persistence, and rebuild behavior."
+    },
+    {
+      "id": "US-112",
+      "title": "Add graph-assisted expansion to knowledge retrieval",
+      "description": "As an agent, I need search_knowledge_base to optionally expand retrieval through the local graph so answers can use related skills, workspace docs, and trace evidence beyond direct keyword matches.",
+      "acceptanceCriteria": [
+        "Extend `search_knowledge_base` with a graph-assisted mode that uses the persisted graph when available",
+        "Keep existing BM25/vector retrieval behavior as the baseline path",
+        "Implement one-hop or two-hop expansion from directly matched nodes to related evidence nodes",
+        "Return a readable result that separates direct matches from graph-expanded evidence",
+        "Return a friendly fallback when the graph file is missing or stale",
+        "Add tests proving graph expansion surfaces related evidence not present in the direct match text",
+        "Add tests proving baseline retrieval still works when graph mode is disabled",
+        "Tests pass"
+      ],
+      "priority": 12,
+      "passes": true,
+      "notes": "Extended search_knowledge_base with optional graph-assisted retrieval via use_graph=true. The baseline BM25/vector path remains unchanged by default, while graph mode appends direct matches plus graph-expanded evidence and a friendly missing-graph fallback. Added tests for graph expansion, unavailable graph behavior, and baseline preservation."
+    },
+    {
+      "id": "US-113",
+      "title": "Expose graph retrieval diagnostics in APIs and traces",
+      "description": "As a developer, I need graph retrieval to be observable so interview demos can explain which nodes and edges influenced an answer.",
+      "acceptanceCriteria": [
+        "Add backend API support for graph summaries and graph node detail lookup",
+        "Trace records include graph retrieval metadata when graph-assisted search is used",
+        "Metadata includes direct node ids, expanded node ids, edge types traversed, and evidence count",
+        "Frontend runtime diagnostics can display graph retrieval metadata for a trace",
+        "Missing graph metadata renders as a neutral empty state",
+        "Add backend tests for graph summary/detail APIs",
+        "Add or update frontend type definitions for the graph diagnostic payload",
+        "Relevant checks pass"
+      ],
+      "priority": 13,
+      "passes": true,
+      "notes": "Added graph summary and graph node detail APIs, initialized trace records with graph_retrieval metadata, extended frontend trace types, and added a compact graph retrieval diagnostics card in the runtime trace panel. Backend graph API tests and frontend typecheck pass."
+    },
+    {
+      "id": "US-114",
+      "title": "Add Graph RAG eval and interview demo narrative",
+      "description": "As a hiring-facing developer, I need a small evaluation and demo story that proves graph-assisted retrieval improves multi-hop agent questions without overselling the implementation.",
+      "acceptanceCriteria": [
+        "Add at least five multi-hop eval tasks that benefit from graph-assisted retrieval",
+        "Add an eval profile or report section comparing baseline retrieval with graph-assisted retrieval",
+        "Document when graph-assisted retrieval helps and when it is unnecessary",
+        "Update the interview demo materials with a concise Graph RAG explanation",
+        "Add a screenshot or demo checklist item for graph retrieval diagnostics",
+        "Relevant tests and eval rendering checks pass"
+      ],
+      "priority": 14,
+      "passes": true,
+      "notes": "Added five graph_retrieval multi-hop eval tasks, a no_graph_retrieval ablation profile, and a Markdown report section that compares graph-enabled vs graph-disabled behavior for graph tasks. Updated interview demo docs and workspace prompt sheet with concise Graph-RAG-inspired wording, clear limits versus full community-summarization GraphRAG, and screenshot checklist coverage for graph retrieval diagnostics."
+    },
+    {
+      "id": "US-115",
+      "title": "Add retrieval quality metrics and a labeled eval set",
+      "description": "As a hiring-facing developer, I need measurable retrieval quality signals so Mini-OpenClaw can show whether graph-assisted retrieval actually improves evidence discovery.",
+      "acceptanceCriteria": [
+        "Add a small labeled retrieval eval dataset with queries and relevant document or graph node ids",
+        "Compute retrieval metrics including Recall@K, MRR, Hit@1, and nDCG@K",
+        "Compare baseline retrieval against graph-assisted retrieval in a machine-readable JSON report",
+        "Render the retrieval metric comparison in the Markdown eval report",
+        "Keep the implementation offline and deterministic for CI/demo repeatability",
+        "Add unit tests for metric calculations, dataset loading, comparison aggregation, and Markdown rendering",
+        "Tests pass"
+      ],
+      "priority": 15,
+      "passes": true,
+      "notes": "Added a labeled offline retrieval eval dataset with five multi-hop interview/demo cases, metric helpers for Recall@K, MRR, Hit@1, and nDCG@K, and a deterministic baseline vs graph_assisted comparison in the JSON eval report. The Markdown renderer now includes a Retrieval Quality Metrics section with per-strategy scores and deltas, and tests cover dataset loading, metric math, aggregation, and report rendering."
+    },
+    {
+      "id": "US-116",
+      "title": "Harden python_repl with subprocess isolation",
+      "description": "As a developer, I need python_repl to execute snippets out of process with guardrails so demo and interview reviewers can trust the sandbox story.",
+      "acceptanceCriteria": [
+        "Execute Python snippets in a subprocess instead of the backend process",
+        "Enforce a timeout and return a friendly timeout error",
+        "Run with a minimized environment and controlled working directory",
+        "Apply CPU or memory resource limits where the platform supports them, with graceful fallback on macOS",
+        "Preserve existing behavior for simple arithmetic and standard-library imports such as math",
+        "Add tests for successful execution, timeout handling, and sandbox guardrails",
+        "Tests pass"
+      ],
+      "priority": 16,
+      "passes": true,
+      "notes": "Replaced the in-process LangChain PythonREPLTool wrapper with a subprocess-backed implementation using isolated Python mode, a temporary working directory, minimized environment, timeout handling, and best-effort CPU/memory resource limits. Added AST-based guardrails for unsafe imports, filesystem/process calls, and preserved arithmetic plus safe standard-library imports such as math. Tests cover success, math import, blocked filesystem writes, timeout/resource-limit friendly errors, and agent tool registration regressions."
+    },
+    {
+      "id": "US-117",
+      "title": "Centralize runtime configuration with Pydantic Settings",
+      "description": "As a maintainer, I need typed runtime configuration so model endpoints, storage paths, graph options, and tool limits are visible and overrideable without scattered constants.",
+      "acceptanceCriteria": [
+        "Add a backend settings module based on Pydantic Settings or an equivalent typed fallback if the installed Pydantic version lacks pydantic-settings",
+        "Centralize defaults for model provider/base URL/API key, retrieval top_k, graph path, storage directories, and tool timeout values",
+        "Load values from environment variables and optional .env files",
+        "Update low-risk backend modules to read settings instead of duplicating constants",
+        "Document the important environment variables for local demo setup",
+        "Add tests for defaults and environment overrides",
+        "Tests pass"
+      ],
+      "priority": 17,
+      "passes": true,
+      "notes": "Added backend/settings.py as a typed Pydantic BaseModel configuration center with .env/environment loading and pydantic-settings-style behavior without adding a new dependency. Centralized OpenAI-compatible provider settings, backend host/port/CORS, knowledge/storage/graph paths, retrieval top_k, workspace/memory/skills/traces paths, and python_repl timeout/memory limits. Wired low-risk modules including app startup/CORS/model-name resolution, graph agent model construction, graph index defaults, search_knowledge_base paths/top_k, and python_repl limits. Added runtime configuration docs and tests for defaults plus env overrides."
+    },
+    {
+      "id": "US-118",
+      "title": "Mirror eval datasets into LangSmith and keep local reports as fallback",
+      "description": "As a maintainer, I need Mini-OpenClaw's eval datasets mirrored into LangSmith so future experiments can compare runs without losing the local offline report flow.",
+      "acceptanceCriteria": [
+        "Add LangSmith configuration for API key, endpoint, and project name",
+        "Export the existing core task and retrieval quality datasets into LangSmith datasets/examples",
+        "Expose a CLI or runner flag that syncs local eval data to LangSmith without requiring the network by default",
+        "Keep the current JSON and Markdown reports working when LangSmith is unavailable",
+        "Add tests for dataset conversion, sync skip behavior, and offline fallback",
+        "Document the LangSmith eval workflow and required environment variables",
+        "Tests pass"
+      ],
+      "priority": 18,
+      "passes": true,
+      "notes": "Added a LangSmith eval sync layer that mirrors the existing core task and retrieval quality datasets into LangSmith datasets/examples when an API key is configured. The runner now supports `--langsmith-sync`, writes the sync result into JSON and Markdown reports, and safely falls back to local-only reports when LangSmith is unavailable. Added LangSmith settings, a pinned direct langsmith dependency, workflow docs, and tests for dataset sync creation, existing-dataset skip behavior, no-key fallback, settings overrides, and Markdown rendering."
     }
   ]
 }

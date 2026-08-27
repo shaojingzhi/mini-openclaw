@@ -1,0 +1,796 @@
+# Ralph Progress Log
+Started: 2026年 6月 4日 星期四 00时57分56秒 CST
+---
+
+## Codebase Patterns
+- New offline eval work should live under `backend/evals/` with a file-based dataset + report contract. Keep `backend/evals/__init__.py` import-light; `python -m backend.evals.runner` will emit a runtime warning if the package pre-imports `runner` before module execution.
+- Frontend sidebar interactions in `frontend/src/app/page.tsx` can stay client-only for now: fetch `/api/sessions` inside `useEffect`, keep `activeNav` and `activeSessionId` in local state, and derive the visible highlight classes from that state instead of hard-coded placeholder booleans.
+- Frontend chat transcripts can stay page-local too: keep `Record<sessionId, ChatMessage[]>` state in `frontend/src/app/page.tsx`, seed a per-session assistant placeholder before starting `streamChat()`, and fold each SSE event into that placeholder so `final` text and the reasoning trace stay attached to one visible bubble.
+- Frontend shell uses a fixed top nav mounted as a sibling above the main frosted workspace card. When adding persistent chrome, offset the page with top padding (`pt-24` / `sm:pt-28`) and shrink the shell min-height instead of nesting the nav inside the card.
+- Frontend API wrappers should centralize the backend origin in one `buildApiUrl()` helper that reads `NEXT_PUBLIC_API_URL` with the localhost fallback. Keep `streamChat` on `fetch` + `ReadableStream.getReader()` instead of `EventSource` so it can use POST `/api/chat` and share the same typed parsing path as the rest of the client.
+- Session-list endpoints that depend on patched storage paths should import the storage module (`from backend import sessions_store`) and dereference `sessions_store.SESSIONS_DIR` / `sessions_store.load_session(...)` at call time. Copying those names into `backend.app` at import time breaks `patch.object(..., "SESSIONS_DIR", ...)` tests and can desync runtime state.
+- File-editor API path checks should resolve both the candidate path and each allowed root before calling `Path.relative_to(...)`. Mixed absolute/relative `Path` objects make in-root files look out-of-root and produce false 403s in tests.
+- `langchain` / `sse-starlette` mixed response endpoints in FastAPI must disable response-model generation: use `@app.post(..., response_model=None)` when the handler may return `EventSourceResponse` for SSE or a normal dict for non-stream mode. A union return annotation alone will make route registration fail.
+- LangChain agent streaming for UI/SSE should normalize two shapes: custom app-level events if the agent emits `{type/event_type: thought|tool_call|tool_result|final, data: ...}`, and raw `astream_events(version="v2")` events like `on_tool_start`, `on_tool_end`, `on_chat_model_stream` when working against plain `create_agent` output. Collect streamed chat-model chunks and synthesize one trailing `final` event if no explicit final arrives.
+- Python backend uses Python 3.10+ syntax with `from __future__ import annotations` and PEP 604/585 typing (e.g. `dict[str, str]`).
+- FastAPI app object lives in `backend/app.py` and is imported as `backend.app:app` (note: project root must be on `PYTHONPATH`, i.e. run uvicorn from repo root).
+- Backend directory layout (per PRD §4): `backend/{memory,memory/logs,sessions,skills,workspace,tools,graph}` — empty dirs get `.gitkeep` so git tracks them.
+- Endpoints use plain `def` returning typed dicts rather than `async def` unless I/O blocks (keep it simple until needed).
+- Host Python is system Python 3.14 on macOS — it's PEP 668 "externally-managed", so any `pip install` for verification MUST use a venv (`python3 -m venv /tmp/<name>` then `<venv>/bin/pip install --dry-run -r backend/requirements.txt`). Don't use `--break-system-packages`.
+- Dependencies are pinned with `==` in `backend/requirements.txt` for reproducibility. LangChain is on 1.x stable (currently 1.3.4); langchain-community 0.4.x, langchain-experimental 0.4.x, langchain-openai 1.2.x form the matching set. `langchain==1.3.4` pulls in `langchain-core 1.4.0`, `langgraph 1.2.4`, `langchain-classic 1.0.7` as transitives — all expected.
+- Verify dep changes with `pip install --dry-run` in a throwaway venv; greppable signals of success: no `error`/`conflict`/`incompatible` lines, and a final `Would install ...` line.
+- System Prompt source files (6 total) live in two dirs: 5 in `backend/workspace/` (SOUL/IDENTITY/USER/AGENTS/SKILLS_SNAPSHOT) and 1 in `backend/memory/` (MEMORY.md). US-011's assembler concatenates them in this fixed order: SKILLS_SNAPSHOT → SOUL → IDENTITY → USER → AGENTS → MEMORY.
+- `AGENTS.md` contains TWO protocols: the SKILL PROTOCOL block must be verbatim from PRD §4.3; the MEMORY PROTOCOL block was authored locally (PRD shows it as `...`). Future stories that touch memory writes (e.g. anything appending to MEMORY.md) should respect the rules written there — read/write triggers, transparent disclosure, etc.
+- When a story seeds real files into a `.gitkeep`-ed empty dir, remove the `.gitkeep` in the same commit so we don't carry placeholders forever.
+- Agent tools (PRD §2.3) live in `backend/tools/<name>.py` and expose a `@tool("<name>")`-decorated function (LangChain 1.x pattern from `langchain_core.tools`). Each tool module re-exports its tool via `backend/tools/__init__.py` `__all__`. Invoke in tests with `tool.invoke({"<arg>": value})`.
+- `langchain_experimental.llm_bash.bash.BashProcess` has no `cwd` parameter — to pin a shell tool to a sandbox root, prefix every command with `cd <shlex.quoted-root> && (...)` before delegating to `ShellTool().process.run(...)`. Don't reach for `subprocess` directly; the PRD §2.3 wording is "wrap" the LangChain tool.
+- Tests live in `backend/tests/test_<module>.py` using stdlib `unittest` (no pytest in requirements yet). Run them in the venv with `/tmp/mini-openclaw-test-venv/bin/python -W ignore -m unittest backend.tests.test_<module> -v` — the `-W ignore` silences the noisy `langchain-community`/`langchain-experimental` "being sunset" deprecation warnings emitted at import.
+- `langchain-community` and `langchain-experimental` are both formally sunset; their deprecation warnings are expected, not actionable. The PRD intentionally pins them because that's where `ShellTool`/`RequestsGetTool`/`ReadFileTool`/`PythonREPLTool` still live in the 0.4.x line we pinned in US-002.
+- Tool-wrapping pattern (US-004/005/006, applies to US-007): instantiate the underlying LangChain tool ONCE at module scope as a private singleton (e.g. `_SHELL_TOOL`, `_REPL_TOOL`, `_REQUESTS_TOOL`), then expose a thin `@tool("<name>")`-decorated function whose typed signature drives the new `args_schema`. Call the singleton via `.invoke(...)` or its `.process.run(...)` for sandbox-prefixed bash. Tools normally return stdout WITH a trailing newline; `.rstrip()` is a safe normalisation (use `.splitlines()` later if line counts matter).
+- Patching LangChain tools in tests: `RequestsGetTool`, `TextRequestsWrapper`, `ShellTool`, and most other `langchain_community`/`langchain_core` tools are Pydantic-v2 models with `model_config` that forbids attribute mutation. `unittest.mock.patch("...x.y")` where `y` is an attribute on a Pydantic instance will fail at teardown with `'<Model>' object has no attribute 'y'` from the model's `__delattr__`. Workaround: patch the module-level singleton itself with a `MagicMock` (e.g. `patch("backend.tools.fetch_url._REQUESTS_TOOL", stub)`) and configure `stub.invoke.return_value = ...`. Applies to US-007 read_file tests and the US-012 mocked-LLM agent test.
+- `RequestsGetTool` construction requires `allow_dangerous_requests=True` — the `BaseRequestsTool.__init__` explicitly raises `ValueError` otherwise. The flag is named after the upstream LangChain security guidance, not because anything we do is more dangerous than a normal HTTP GET.
+- `html2text.HTML2Text()` line-wraps to 78 cols by default, which scrambles paragraphs. Always set `converter.body_width = 0` before `.handle()` so paragraphs stay on a single line — this matters for LLM consumption.
+- `langchain_community.tools.file_management.ReadFileTool` has built-in sandboxing via the `root_dir` field on `BaseFileToolMixin` — pass `root_dir=str(PROJECT_ROOT)` at construction and you get free `Access denied to file_path: ...` rejection for any path that resolves outside root. NO custom blacklist is needed (unlike `terminal`, where `BashProcess` has no cwd binding). The denial path covers both absolute paths (because `Path("/x") / "/etc/passwd"` returns `Path("/etc/passwd")`, which then isn't relative to root) and `..` traversal. Missing files inside root return a DIFFERENT error string (`Error: no such file or directory: ...`) — tests can rely on this distinction.
+- LlamaIndex tools live behind LAZY imports: heavy modules from `llama_index.core` / `llama_index.retrievers.bm25` should be imported INSIDE the function that builds the index, not at module top, so `@tool` decoration and the FastAPI startup stay fast. The retriever itself is cached at module scope in a `dict` keyed by `(knowledge_dir, storage_dir)`; tests call a public `clear_cache()` between cases to force a rebuild against monkey-patched paths.
+- Tests that need to monkey-patch a module attribute (`patch.object(sk_mod, "KNOWLEDGE_DIR", ...)`) MUST import the module via `importlib.import_module("backend.tools.search_knowledge_base")` — `from backend.tools import search_knowledge_base as sk_mod` will silently bind to the re-exported `@tool` function (the `__init__.py` `from … import name` rebinds the submodule attribute on the package). The same caveat applies to `read_file`, `fetch_url`, etc.
+- Functions that read patched module-level state MUST refer to the names directly (e.g. `KNOWLEDGE_DIR`, not a default arg `dir = KNOWLEDGE_DIR`). Default arg values are bound at function-definition time and freeze the original `Path`; bare references go through the module globals each call and respect `patch.object`.
+- LlamaIndex `QueryFusionRetriever` only calls the configured LLM when `num_queries > 1`. With `num_queries=1` it just merges results from the input retrievers via `mode` math (`reciprocal_rerank` / `simple` / `relative_score` / `dist_based_score`) — no API key needed for fusion itself. We still set `Settings.llm = MockLLM()` defensively and use `MockEmbedding(embed_dim=384)` when `OPENAI_API_KEY` is missing so `VectorStoreIndex.from_documents()` does not try to call OpenAI for embedding either.
+- LlamaIndex persistence sentinel: presence of `<storage_dir>/docstore.json` means a valid index exists and can be reloaded with `StorageContext.from_defaults(persist_dir=...)` + `load_index_from_storage(ctx)`. Wrap the reload in `try/except` and fall back to a rebuild — corrupt persist dirs should never crash a tool.
+- `BM25Retriever.from_defaults(nodes=...)` is the right entry point for ad-hoc indexes; it takes a list of `BaseNode` (use `list(index.docstore.docs.values())` after building a `VectorStoreIndex`). If `similarity_top_k` exceeds the corpus size, bm25s prints a warning and silently clamps to `len(nodes)` — that warning is benign.
+- `backend/storage/` is ALREADY in `.gitignore` (since US-001 wave). `backend/knowledge/` is empty by design with a `.gitkeep`; the search tool gracefully reports `EMPTY_KB_MESSAGE` if the folder has no readable files or doesn't exist.
+- `PyYAML 6.0.3` is a stable TRANSITIVE dep (required by langchain-core, langchain-community, langchain-classic, llama-index-core) — `import yaml` is safe anywhere in `backend/` without adding to `requirements.txt`. The same is true for other heavy transitives: check `pip show <pkg>` in `/tmp/mini-openclaw-test-venv` before deciding to pin a new direct dep that may already be present.
+- YAML frontmatter parsing: use regex `r"\A---[ \t]*\n(.*?)\n---[ \t]*(?:\n|\Z)"` with `re.DOTALL` to extract the block, then `yaml.safe_load` it. Handles both newline-terminated and EOF-terminated `---` fences. Fall back to defaults (folder name, empty string) when frontmatter is missing or `yaml.safe_load` raises — never crash a bootstrap pass.
+- Tests using `tempfile.TemporaryDirectory()` must keep ALL file-existence assertions INSIDE the `with` block. The tempdir is removed on `__exit__`; any `path.exists()` outside the block will return False even if the file was correctly created. (Bit me once on US-009's persistence test.)
+- After seeding a new `backend/skills/<name>/SKILL.md`, regenerate `backend/workspace/SKILLS_SNAPSHOT.md` by running `python -c "from backend.skills_loader import build_skills_snapshot; print(build_skills_snapshot())"` in the test venv. The committed snapshot should always reflect the current set of skills on disk. (US-014 startup hook will do this automatically; until then, do it manually whenever a SKILL.md is added/removed/renamed.)
+- LangChain 1.x agent factory: `from langchain.agents import create_agent` (NOT `AgentExecutor`, NOT `create_react_agent`). Signature: `create_agent(model, tools, *, system_prompt=None, middleware=(), response_format=None, state_schema=None, ...)`. Returns a `CompiledStateGraph` whose `.invoke({"messages": [{"role": "user", "content": "..."}]})` yields `{"messages": [...]}` with the assistant reply as the last item. The `system_prompt` arg accepts `str | SystemMessage | None`.
+- Mocking the LLM in agent tests: `create_agent` calls `model.bind_tools(tools)` before the first request. `GenericFakeChatModel` / `FakeListChatModel` inherit `BaseChatModel.bind_tools` which raises `NotImplementedError`. Subclass the fake model and override `bind_tools(self, tools, **kwargs)` to return `self` — the scripted reply passes through unchanged. Don't try to monkeypatch the method on an instance (Pydantic v2 model rejects it, per the US-006 pattern).
+- OpenAI-compatible model client: `langchain_openai.ChatOpenAI(model=..., api_key=..., base_url=...)`. `base_url` should only be passed when set (omitting it preserves the upstream OpenAI default; passing `None` triggers a deprecation path). The Pydantic field aliases are `openai_api_base` / `openai_api_key` but the kwargs `base_url` / `api_key` are the canonical surface in langchain-openai 1.2.x.
+- Session persistence (US-013) lives in `backend/sessions_store.py` exposing `load_session(name) -> list[dict]` + `append_message(name, message) -> list[dict]`. Sessions stored at `backend/sessions/{name}.json` as JSON arrays with roles `user` / `assistant` / `tool` (set in `ALLOWED_ROLES`). Session names are validated against `^[A-Za-z0-9._-]+$` to prevent path traversal — DO NOT allow `/`, `..`, or empty names. Writes are atomic via `.tmp` + `Path.replace`. Load on missing/corrupt files returns `[]` (never raises) so a single bad session can't crash agent startup. US-014's `/api/chat` should call these directly: persist the incoming user message before invoking the agent, then persist the final assistant message after streaming completes.
+- For App Router layout shells, drive the desktop three-column structure from the page-level grid with `lg:grid-cols-[240px_minmax(0,1fr)] xl:grid-cols-[240px_minmax(0,1fr)_420px]` and hide the inspector below `xl`. That keeps the left rail visible on laptops while satisfying the v1 "collapse the inspector under 1024px-ish" requirement without a resize system.
+---
+
+## 2026-06-04 - US-001
+- Implemented FastAPI scaffold and directory tree.
+- Files changed:
+  - `backend/__init__.py` (new, empty package marker)
+  - `backend/app.py` (new — `FastAPI` instance + `GET /health` returning `{"status": "ok"}`, plus `uvicorn.run` entrypoint on port 8002)
+  - `backend/tools/__init__.py`, `backend/graph/__init__.py` (package markers)
+  - `backend/memory/logs/.gitkeep`, `backend/sessions/.gitkeep`, `backend/skills/.gitkeep`, `backend/workspace/.gitkeep` (preserve empty dirs in git)
+- Verification:
+  - `python3 -m py_compile` succeeds on all new files.
+  - Importing `backend.app` exposes `/health` route.
+  - `TestClient(app).get('/health')` returns 200 with `{"status": "ok"}`.
+  - Live run `python3 -m uvicorn backend.app:app --port 8002` answers `curl http://127.0.0.1:8002/health` with `{"status": "ok"}`.
+- **Learnings for future iterations:**
+  - The project has no `requirements.txt` yet (that is US-002) but `fastapi` is already installed in the host Python (0.135.1). Don't assume virtualenv — run with system `python3`.
+  - There is no `mypy`/`pyright` installed; "typecheck passes" is currently enforced via `py_compile` + manual review. Future stories may want to add `mypy` to requirements when convenient.
+  - The system shell on this machine is `zsh` on macOS; `mkdir -p` works to create the full backend tree in one call.
+  - `from __future__ import annotations` keeps PEP 604 union syntax working on older runtimes; use it in every module.
+  - Empty directories (`memory/logs`, `sessions`, `skills`, `workspace`) need `.gitkeep` because git won't track empty dirs — future stories that seed real files into these dirs can delete the `.gitkeep`.
+---
+
+## 2026-06-04 - US-002
+- Added `backend/requirements.txt` declaring all 13 required Python deps with `==` pins.
+- Files changed:
+  - `backend/requirements.txt` (new)
+- Choices:
+  - LangChain pinned to `1.3.4` (latest 1.x stable as of 2026-06-04). Matching sibling pins: `langchain-community==0.4.2`, `langchain-experimental==0.4.2`, `langchain-openai==1.2.2`.
+  - LlamaIndex split into `llama-index-core==0.14.22` + `llama-index-retrievers-bm25==0.7.1` (per PRD §2.5).
+  - `uvicorn` pinned as `uvicorn[standard]==0.41.0` so production deps (httptools/uvloop/watchfiles) come along — LangChain 1.x SSE servers benefit from uvloop.
+  - HTML cleaning: both `beautifulsoup4==4.14.3` and `html2text==2025.4.15` (PRD §2.3 mentions either; included both because the wrapper in US-006 will likely pre-strip script/style with bs4 then convert with html2text).
+  - SSE: `sse-starlette==3.4.4` for the `/api/chat` endpoint in US-014.
+- Verification:
+  - Resolved cleanly in fresh `/tmp/mini-openclaw-test-venv` (Python 3.14) — `pip install --dry-run -r backend/requirements.txt` ended with a `Would install ...` plan covering ~80 packages and zero `error`/`conflict`/`incompatible` lines.
+  - `python3 -m py_compile backend/app.py backend/__init__.py backend/tools/__init__.py backend/graph/__init__.py` still OK.
+- **Learnings for future iterations:**
+  - On this machine, system Python 3.14 is PEP 668 "externally-managed"; you cannot just `pip install` — always use a throwaway venv. I left `/tmp/mini-openclaw-test-venv` behind (gitignored by location) but feel free to recreate it.
+  - `langchain==1.3.4` transitively brings in `langchain-core 1.4.0`, `langgraph 1.2.4`, `langgraph-prebuilt 1.1.0`, `langgraph-checkpoint 4.1.1`, `langchain-classic 1.0.7`, `langchain-text-splitters 1.1.2`. US-012 (`create_agent`) is `from langchain.agents import create_agent` — confirmed it's a public re-export in 1.3.4, no need to import from langgraph directly.
+  - `langchain-openai==1.2.2` pulls `openai==2.40.0` (the 2.x SDK) and `tiktoken==0.13.0`. Future stories using `ChatOpenAI` should target the 2.x SDK shape.
+  - `pydantic==2.12.5` + `pydantic-core==2.41.5` are already what's installed system-wide, so FastAPI's response models will work without surprises.
+  - llama-index transitives include `bm25s==0.3.9`, `PyStemmer==2.2.0.3`, `nltk==3.9.4` — US-008 (hybrid retrieval) won't need extra pins for BM25.
+  - `langchain-community==0.4.2` is where `ShellTool`, `RequestsGetTool`, and `ReadFileTool` live; `langchain_experimental==0.4.2` is where `PythonREPLTool` lives — paths verified against the version we pinned.
+  - No `mypy`/`pyright` in the host env still — typecheck is enforced by `py_compile` + careful review until someone adds a checker. requirements.txt is data-only, so there is nothing to typecheck this iteration.
+---
+
+## 2026-06-04 - US-003
+- Seeded the six System Prompt source files (minus SKILLS_SNAPSHOT, which US-009 generates).
+- Files changed:
+  - `backend/workspace/SOUL.md` (new — default persona: 透明 / 务实 / 谦逊学习, Chinese-default voice)
+  - `backend/workspace/IDENTITY.md` (new — describes "what I am, where I run, what I can do"; names the 5 Core Tools and locates the backend at `localhost:8002`)
+  - `backend/workspace/USER.md` (new — empty profile template with sections: 基本信息 / 工作背景 / 协作偏好 / 长期目标 / 不要记)
+  - `backend/workspace/AGENTS.md` (new — SKILL PROTOCOL verbatim from PRD §4.3 + a concrete MEMORY PROTOCOL filling the `...` placeholder + a 工具使用准则 section)
+  - `backend/memory/MEMORY.md` (new — empty long-term memory template with sections: 项目上下文 / 用户约定 / 工具环境约束 / 已废弃)
+  - `backend/workspace/.gitkeep` (deleted — no longer needed now that real files are present)
+- Verification:
+  - `python3 -m py_compile` on all existing backend `.py` files still succeeds (no Python touched this iteration).
+  - `grep "技能调用协议 (SKILL PROTOCOL)" backend/workspace/AGENTS.md` matches line 3 — header preserved verbatim.
+  - SKILLS_SNAPSHOT.md confirmed absent (criterion 6).
+- **Learnings for future iterations:**
+  - PRD §4.3 only writes out the SKILL PROTOCOL in full; the "记忆协议" section is shown as `...`. I authored a concrete MEMORY PROTOCOL inline (read triggers, write triggers, append-with-date, transparent disclosure rule). When US-014 / future memory-write code lands, it must respect those rules — especially the "tell the user what file you wrote to" disclosure clause.
+  - Default file language is Chinese to match the PRD's voice; the agent persona in SOUL.md says "default to Chinese unless user uses English." If future stories add English-only fixtures, they should not overwrite SOUL/IDENTITY/USER/AGENTS/MEMORY — those are user-editable runtime content, not test fixtures.
+  - `backend/workspace/` previously held only `.gitkeep`. After seeding, removed `.gitkeep` to avoid clutter. `backend/memory/logs/.gitkeep` and other empty-dir markers are still in place where appropriate.
+  - The PRD's "build the prompt" story (US-011) will need to read these exact 5 files plus SKILLS_SNAPSHOT.md. The order is SKILLS_SNAPSHOT → SOUL → IDENTITY → USER → AGENTS → MEMORY (PRD §4.2). Don't reorder.
+---
+
+## 2026-06-04 - US-005
+- Implemented the `python_repl` agent tool.
+- Files changed:
+  - `backend/tools/python_repl.py` (new — `@tool("python_repl")` wrapping `langchain_experimental.tools.PythonREPLTool`; rstrips trailing newline so `print(2+2)` returns `"4"` not `"4\n"`).
+  - `backend/tools/__init__.py` (re-export `python_repl` alongside `terminal`; `__all__` sorted alphabetically).
+  - `backend/tests/test_python_repl.py` (new — 3 unittest cases: print-2+2 == "4", arithmetic chain `(3*7)-1 == 20`, `import math` exercising `sqrt(16)` and `floor(3.7)`).
+- Design notes:
+  - `PythonREPLTool` has no `args_schema` (`None`) but its `args` dict shows the single string field is named `query` — so call sites use `tool.invoke({"query": "..."})`. The `@tool` decorator on our wrapper rebuilds an `args_schema` from the wrapper's `query: str` signature, keeping that contract.
+  - The underlying tool ALWAYS prints `"Python REPL can execute arbitrary code. Use with caution."` to stderr on first import-time use. That is a one-shot stderr line, not part of `stdout`, so `rstrip()` of the captured value is sufficient.
+  - `_REPL_TOOL` is a module-level singleton, same pattern as `_SHELL_TOOL` in `terminal.py`.
+- Verification:
+  - `python3 -m py_compile backend/tools/python_repl.py backend/tools/__init__.py backend/tests/test_python_repl.py` → clean (host Python 3.14).
+  - `/tmp/mini-openclaw-test-venv/bin/python -W ignore -m unittest backend.tests.test_python_repl -v` → 3/3 OK in 0.013s.
+  - Full suite (`test_terminal` + `test_python_repl`) → 7/7 OK.
+- **Learnings for future iterations:**
+  - `PythonREPLTool.invoke(snippet)` returns the captured stdout as a single string with a trailing `\n`. If a future story needs to *count* lines or *parse* output, prefer `.splitlines()` rather than `.split("\n")` to avoid an empty trailing element.
+  - `print(...)` is mandatory inside the REPL snippet to surface a value — the snippet's *return value* is discarded. The docstring of our wrapper says so; the agent SOUL.md / IDENTITY.md don't need to repeat it.
+  - Modern `@tool("name")` wrappers around an existing langchain tool work cleanly: instantiate the underlying tool once at module scope, expose a thin Python function with typed args, and let the decorator build the `args_schema`. This is now the established pattern for US-005, US-006 (`fetch_url`), and US-007 (`read_file`).
+  - When stripping output, prefer `.rstrip()` (whitespace-aware, idempotent) over `.rstrip("\n")` — covers `\r\n` on Windows-style outputs too. No actual blocker in this story; just consistent across tools.
+---
+
+## 2026-06-04 - US-004
+- Implemented the sandboxed `terminal` agent tool.
+- Files changed:
+  - `backend/tools/terminal.py` (new — `@tool("terminal")` wrapping `langchain_community.tools.ShellTool`; pre-filters destructive commands and prefixes every accepted command with `cd <project-root> && (...)` before delegating to `_SHELL_TOOL.process.run`).
+  - `backend/tools/__init__.py` (was empty; now re-exports `terminal` so consumers can do `from backend.tools import terminal`).
+  - `backend/tests/__init__.py` (new, empty — package marker for the test tree).
+  - `backend/tests/test_terminal.py` (new — 4 unittest cases: blacklist truth-table for the 5 PRD-named patterns, allowed-command output assertion via `echo hello-mini-openclaw`, refusal-string assertion for `rm -rf /`).
+- Design notes:
+  - Blacklist is a tuple of compiled regexes living at module scope. Patterns: `\brm\s+-rf\s+/`, `\brm\s+-rf\s+~`, fork-bomb literal `:(){:|:&};:` (with tolerant whitespace), `\bmkfs\b`, `\bdd\s+if=`. The first two match any `rm -rf /<anything>` / `rm -rf ~<anything>` — the PRD's "including" wording invites a slightly broader interpretation than the exact strings.
+  - Refusal string is exported as `BLOCKED_MESSAGE` so tests can assert exact equality without string-duplication drift.
+  - Root dir is computed once at import as `Path(__file__).resolve().parents[2]` (project root, not `backend/`). The PRD criterion is "root_dir set to the project root"; the terminal needs to see scripts/, frontend/, etc., not just backend/.
+  - `_SHELL_TOOL` is a module-level singleton — instantiating ShellTool per call is wasteful and triggers Pydantic warnings every time.
+- Verification:
+  - `python3 -m py_compile` clean on all 4 new/modified files (host Python).
+  - `/tmp/mini-openclaw-test-venv/bin/python -W ignore -m unittest backend.tests.test_terminal -v` → 4/4 OK in 0.010s.
+- **Learnings for future iterations:**
+  - `BashProcess` has no `cwd` — confirmed by reading `langchain_experimental/llm_bash/bash.py`. Future tool wrappers that need sandboxing (US-007 `read_file` will need similar root-restriction via `root_dir` on `ReadFileTool`, which DOES support it; US-008's index path under `backend/storage/`) cannot rely on a shared "set cwd once" mechanism — each tool sandboxes itself.
+  - The `langchain_community` ShellTool field set is: `name, description, args_schema, return_direct, verbose, callbacks, tags, metadata, handle_tool_error, handle_validation_error, response_format, extras, process, ask_human_input`. `ask_human_input` defaults to False — agent invocations won't block on stdin, good.
+  - Modern `@tool("<name>")` decorator from `langchain_core.tools` produces a `StructuredTool` whose `args_schema` is auto-built from the function's type hints. Invoking with `tool.invoke({"arg": value})` always works; `tool.invoke(value)` works for single-arg tools too.
+  - `langchain_community` and `langchain_experimental` both print deprecation warnings on import — expected, see codebase pattern above. Don't try to "fix" them by migrating away; that's not in scope until the PRD is rewritten.
+  - The `_run_in_root` helper uses `shlex.quote(str(PROJECT_ROOT))` so paths with spaces won't break the `cd` prefix. Apply the same pattern in future tools that compose shell strings.
+---
+
+## 2026-06-04 - US-006
+- Implemented the `fetch_url` agent tool with HTML→Markdown post-processing.
+- Files changed:
+  - `backend/tools/fetch_url.py` (new — `@tool("fetch_url")` wrapping `langchain_community.tools.RequestsGetTool`; passes raw HTML through `_clean_html` which decomposes `<script>`/`<style>` with BeautifulSoup then converts to Markdown via `html2text` with `body_width=0`).
+  - `backend/tools/__init__.py` (re-export `fetch_url`; `__all__` re-sorted alphabetically: fetch_url, python_repl, terminal).
+  - `backend/tests/test_fetch_url.py` (new — 3 unittest cases: script/style stripping incl. tag-name removal; Markdown structure preservation for h1/link/bullets; full `fetch_url.invoke({"url": ...})` path with `_REQUESTS_TOOL` stubbed at module level).
+- Design notes:
+  - `RequestsGetTool.__init__` (via `BaseRequestsTool`) raises `ValueError` unless `allow_dangerous_requests=True` is passed — the flag is mandatory, not optional, so it lives in the singleton constructor.
+  - Wrapper is `TextRequestsWrapper()` with defaults — the agent never needs JSON-typed responses from this tool.
+  - `_clean_html` runs BeautifulSoup with the `html.parser` backend (no lxml dep in requirements.txt) and uses `soup(("script", "style"))` + `.decompose()` to remove both tags AND their text content in one pass.
+  - `html2text` configured with `body_width=0`, `ignore_images=False`, `ignore_links=False` — keep all link/image markup so the agent can decide what to follow.
+  - Output is `.rstrip()`-ed for consistency with `python_repl` (test asserts no trailing newline).
+- Test wrinkles I hit:
+  - First attempt patched `_REQUESTS_TOOL.invoke` — Pydantic-v2 model rejected `delattr` at teardown. Same with `_REQUESTS_TOOL.requests_wrapper.get`.
+  - Working approach: replace the whole `_REQUESTS_TOOL` module attribute with a `MagicMock` for the test, configure `stub.invoke.return_value = _FIXTURE_HTML`, assert `stub.invoke.assert_called_once_with({"url": "..."})`. Added a Codebase Pattern about this above so US-007 / US-012 don't have to rediscover it.
+- Verification:
+  - `python3 -m py_compile backend/tools/fetch_url.py backend/tools/__init__.py backend/tests/test_fetch_url.py` → clean.
+  - `/tmp/mini-openclaw-test-venv/bin/python -W ignore -m unittest backend.tests.test_fetch_url -v` → 3/3 OK in 0.007s.
+  - Full suite (`test_fetch_url` + `test_python_repl` + `test_terminal`) → 10/10 OK.
+- **Learnings for future iterations:**
+  - When a LangChain tool wraps a Pydantic-v2 model, NEVER try to monkey-patch instance attributes in tests — Pydantic's `__delattr__` will explode at `patch` teardown. Stub the whole module-level singleton instead. This pattern likely applies to:
+    - US-007 read_file: `ReadFileTool` is a Pydantic-v2 model — same trick.
+    - US-012 agent smoke test: when mocking the LLM, swap the whole `ChatOpenAI` instance, don't patch a method on it.
+  - `BaseRequestsTool` explicitly demands `allow_dangerous_requests=True`. Do NOT silently default it to True in shared library code without surfacing it in the constructor — make the security trade-off visible at the call site.
+  - `bs4` is installed via the `beautifulsoup4==4.14.3` pin from US-002 with `soupsieve` as a transitive — confirmed importable in the test venv. The `html.parser` backend is stdlib, so we don't need `lxml`.
+  - `html2text` defaults wrap lines at 78 columns, which makes paragraph text unreadable. Always set `body_width = 0`.
+  - Future tools that produce text for the LLM should follow the same shape: `_clean_<x>` private helper, public `@tool` function does only the dispatch + cleaning, both `.rstrip()` the result.
+---
+
+## 2026-06-04 - US-007
+- Implemented the project-root-restricted `read_file` agent tool.
+- Files changed:
+  - `backend/tools/read_file.py` (new — `@tool("read_file")` wrapping `langchain_community.tools.file_management.ReadFileTool` with `root_dir=str(PROJECT_ROOT)`).
+  - `backend/tools/__init__.py` (re-export `read_file`; `__all__` re-sorted: fetch_url, python_repl, read_file, terminal).
+  - `backend/tests/test_read_file.py` (new — 4 unittest cases).
+- Design notes:
+  - Unlike `terminal` (US-004) where `BashProcess` had no `cwd` and we had to prefix every command with a `cd` and a destructive-command blacklist, `ReadFileTool` inherits from `BaseFileToolMixin` which already supports `root_dir`. Pass it at construction and the tool's `get_relative_path` raises `FileValidationError` for anything that resolves outside root, returning the fixed `INVALID_PATH_TEMPLATE` ("Access denied to file_path: ...").
+  - `PROJECT_ROOT = Path(__file__).resolve().parents[2]` — same computation as `terminal.py`, so both tools agree on the sandbox root. If a future story needs to share this constant, expose it from `backend/tools/__init__.py`.
+  - The `_READ_FILE_TOOL` singleton is a Pydantic-v2 model (same family as `RequestsGetTool`), so the no-instance-patch tip from US-006 applies if a future test needs to swap it out — but for THIS story we didn't need to mock anything, because the real filesystem provides perfectly stable inputs (`backend/app.py` always exists; `/etc/passwd` always lives outside root).
+- Test coverage:
+  - in-root success: reads `backend/app.py`, asserts equality with `.read_text()`.
+  - absolute-path denial: `/etc/passwd` → "Access denied" string; assert NOT containing "root:" (proof the file wasn't actually read).
+  - relative-traversal denial: `../../etc/passwd` → "Access denied".
+  - missing-file-inside-root: distinct `no such file or directory` error (proves the denial path and the not-found path are distinguishable).
+- Verification:
+  - `python3 -m py_compile backend/tools/read_file.py backend/tools/__init__.py backend/tests/test_read_file.py` → clean.
+  - `/tmp/mini-openclaw-test-venv/bin/python -W ignore -m unittest backend.tests.test_read_file -v` → 4/4 OK in 0.007s.
+  - Full suite (`test_fetch_url` + `test_python_repl` + `test_read_file` + `test_terminal`) → 14/14 OK.
+- **Learnings for future iterations:**
+  - `ReadFileTool` + `WriteFileTool` (langchain_community.tools.file_management) BOTH inherit from `BaseFileToolMixin`. When US-015 implements `POST /api/files`, it can either reuse this same `_READ_FILE_TOOL` instance for reads or write a sibling `WriteFileTool` with the same `root_dir` — but watch out: US-015's allowed-roots are SUBSETS of PROJECT_ROOT (only `backend/memory`, `backend/workspace`, `backend/skills`), so the API endpoint will need a second tighter validation layer above the tool's project-root check.
+  - When the tool needs to expose both a "project-root sandbox" and a "narrower allowed-roots policy" (US-015), do the narrower check FIRST in the API layer (return HTTP 403) and let the tool's own check be the safety net. Don't try to reconfigure `root_dir` per-request — Pydantic v2 models forbid the assignment.
+  - On macOS, `Path("foo") / "/etc/passwd"` returns `Path("/etc/passwd")` — the right operand being absolute discards the left. That is exactly why the denial path is reached for absolute file_paths without needing a custom blacklist. Don't write a redundant `if file_path.startswith("/")` guard.
+  - `INVALID_PATH_TEMPLATE` includes the literal substring `"Access denied"` — tests can assert on that substring without depending on the rest of the template wording. The miss-inside-root case uses a different substring (`"no such file"`), so test_reports_missing_file_inside_root pins both directions.
+---
+
+## 2026-06-04 - US-008
+- Implemented the hybrid (BM25 + vector) `search_knowledge_base` agent tool.
+- Files changed:
+  - `backend/tools/search_knowledge_base.py` (new — `@tool("search_knowledge_base")` building a `QueryFusionRetriever` over `BM25Retriever` + `VectorIndexRetriever`; index persisted under `backend/storage/`; lazy imports + module-level retriever cache with `clear_cache()` for tests).
+  - `backend/tools/__init__.py` (re-export `search_knowledge_base`; `__all__` resorted alphabetically: fetch_url, python_repl, read_file, search_knowledge_base, terminal).
+  - `backend/tests/test_search_knowledge_base.py` (new — 4 unittest cases: empty dir, missing dir, seeded MD keyword retrieval, persist-to-storage check).
+  - `backend/knowledge/.gitkeep` (new — seed the empty knowledge folder so layout matches PRD; `backend/storage/` was already in `.gitignore`).
+- Design notes:
+  - `_configure_settings()` pins `Settings.llm = MockLLM()` and, when `OPENAI_API_KEY` is absent, also `Settings.embed_model = MockEmbedding(embed_dim=384)`. Real OpenAI embeddings are picked up automatically when the env var is present.
+  - `QueryFusionRetriever(num_queries=1, mode="reciprocal_rerank")` skips LLM-based query rewriting entirely — fusion is pure math over the BM25 and vector top-k node sets.
+  - Persistence sentinel is `<storage_dir>/docstore.json`. Reload via `StorageContext.from_defaults(persist_dir=...)` + `load_index_from_storage(ctx)`. Reload errors fall through to a rebuild.
+  - `_get_retriever()` does NOT take default-valued args; it reads `KNOWLEDGE_DIR` / `STORAGE_DIR` from module globals each call, so `patch.object(sk_mod, "KNOWLEDGE_DIR", ...)` actually takes effect.
+- Test wrinkles I hit:
+  - First test run crashed with `AttributeError: ... does not have the attribute 'KNOWLEDGE_DIR'` from `patch.object`. Cause: `from backend.tools import search_knowledge_base as sk_mod` resolves to the re-exported `@tool` function, NOT the module — because `backend/tools/__init__.py` did `from backend.tools.search_knowledge_base import search_knowledge_base`, which rebinds the submodule attribute on the package. Fix: `sk_mod = importlib.import_module("backend.tools.search_knowledge_base")` returns the module from `sys.modules` directly. Added Codebase Pattern about this.
+  - First draft of `_get_retriever` used `def _get_retriever(knowledge_dir: Path = KNOWLEDGE_DIR, ...)` — that captures the original Path at definition time and ignores `patch.object`. Rewrote to read the module-level names directly each call.
+- Verification:
+  - `python3 -m py_compile` clean on all 3 new/modified files (host Python 3.14).
+  - `/tmp/mini-openclaw-test-venv/bin/python -W ignore -m unittest backend.tests.test_search_knowledge_base -v` → 4/4 OK in 0.525s.
+  - Full backend suite (`test_fetch_url` + `test_python_repl` + `test_read_file` + `test_search_knowledge_base` + `test_terminal`) → 18/18 OK in 0.410s.
+- **Learnings for future iterations:**
+  - When a future story (US-009 skills_loader, US-011 prompt_assembler, etc.) needs to monkey-patch a module attribute in tests, USE `importlib.import_module(...)` to grab the module, not `from package import submodule as alias`. The `__init__.py` re-exports shadow the submodule name.
+  - Functions that should respect monkey-patched module state must reference the names directly in the body — no `def f(x=MODULE_LEVEL_PATH)` defaults.
+  - `Settings` in `llama_index.core` is a global singleton; configuring it once in `_configure_settings()` is fine for our single-process tool setup, but be aware that any other LlamaIndex consumer in the same process inherits these settings (currently no others).
+  - `SimpleDirectoryReader` reads MD/TXT out of the box. PDF needs `pypdf` installed — NOT in our pinned `requirements.txt`. If a future story tests PDF ingestion or production users drop PDFs into `backend/knowledge/`, add `pypdf` to requirements.txt. For now, the tool will throw at first PDF read — note this in any docs/README pass.
+  - The persisted storage dir (`backend/storage/`) is gitignored. Don't commit anything into it. The `_build_or_load_index` reload path uses `docstore.json` presence as the sentinel.
+  - `bm25s.BM25 requires k less than or equal to number of nodes added. Overriding ...` is a benign info-log from bm25s when corpus < top_k — not a test failure signal, just noisy. Tests should NOT assert on stderr.
+  - `QueryFusionRetriever` fusion modes: `"simple"` (concat+dedupe), `"reciprocal_rerank"` (RRF, our default), `"relative_score"`, `"dist_based_score"`. RRF works well when BM25 and vector scores have wildly different scales (which they do here, especially with MockEmbedding).
+---
+
+## 2026-06-04 - US-009
+- Implemented the Skills bootstrap that scans `backend/skills/*/SKILL.md` and emits `<available_skills>` XML.
+- Files changed:
+  - `backend/skills_loader.py` (new — `build_skills_snapshot(skills_dir=None, *, write=True, snapshot_path=None) -> str`).
+  - `backend/tests/test_skills_loader.py` (new — 7 unittest cases).
+  - `backend/workspace/SKILLS_SNAPSHOT.md` (new — seeded with the empty-wrapper output by running the bootstrap once; US-003 deliberately deferred this file to US-009).
+- Design notes:
+  - PyYAML is NOT pinned in `backend/requirements.txt`. It is a stable transitive of `langchain-core`, `langchain-community`, `langchain-classic`, AND `llama-index-core` (4 direct requirers), so importing `yaml` at module top is safe across the pinned dep set. Decision rationale: US-002 explicitly enumerated the 13 deps; adding PyYAML deviates from that scope, and the four transitive requirers make accidental removal extremely unlikely.
+  - Frontmatter regex `r"\A---[ \t]*\n(.*?)\n---[ \t]*(?:\n|\Z)"` handles both trailing-newline AND EOF-terminated `---` blocks. `re.DOTALL` lets `.*?` cross newlines.
+  - When frontmatter is missing OR `yaml.safe_load` raises, the function falls back to using the SKILL folder name as `name` and an empty string as `description`. The agent will still see the skill in the snapshot — better to surface a partially-known skill than to silently drop it.
+  - `location` is hard-coded to `./backend/skills/<folder>/SKILL.md`, NOT to `skill_md.relative_to(PROJECT_ROOT)`. Reason: tests pass a temp `skills_dir` outside the project, but the production agent will always read SKILL.md via the `read_file` tool whose `root_dir=PROJECT_ROOT`. The XML must always reference the production layout regardless of where the bootstrap scanned.
+  - XML escaping via `xml.sax.saxutils.escape` only handles `<`, `>`, `&` by default — quotes pass through (PRD example doesn't quote attributes; we use elements only, so quote-safety isn't required). Test `test_xml_special_chars_in_frontmatter_are_escaped` pins this contract.
+  - Empty/missing skills dir returns the same empty wrapper (`<available_skills>\n</available_skills>\n`) — never crashes (consistent with US-008's `EMPTY_KB_MESSAGE` pattern).
+- Test wrinkle I hit:
+  - First draft of `test_write_persists_snapshot_file` ran `out.exists()` OUTSIDE the `with tempfile.TemporaryDirectory()` block, so the dir was already gone — false negative. Moved all assertions inside the `with` block. The tempdir auto-cleanup masked a real test bug for ~10s — worth remembering when writing tempdir-based tests.
+- Verification:
+  - `python3 -m py_compile backend/skills_loader.py backend/tests/test_skills_loader.py` → clean.
+  - `/tmp/mini-openclaw-test-venv/bin/python -W ignore -m unittest backend.tests.test_skills_loader -v` → 7/7 OK in 0.004s.
+  - Full backend suite (skills_loader + terminal + python_repl + fetch_url + read_file + search_knowledge_base) → 25/25 OK in 0.546s.
+  - `python -c "from backend.skills_loader import build_skills_snapshot; print(build_skills_snapshot())"` → prints and writes the empty wrapper; `backend/workspace/SKILLS_SNAPSHOT.md` now exists with the expected content.
+- **Learnings for future iterations:**
+  - PyYAML is freely available via `import yaml` across the codebase — no need to add a direct pin unless the LangChain dep tree changes drastically. Same trick applies to other "obviously needed" transitives like `requests`, `httpx`, `numpy`, etc.; check with `pip show <pkg>` in the test venv before deciding to pin.
+  - For functions that emit relative paths, ALWAYS write the path the production consumer expects, NOT `Path.relative_to(some_root)`. Tests that pass a fixture/temp dir should still see production-style paths in the output — that's a stronger correctness signal than "round-trip a path through the path API".
+  - When writing tempdir-based tests, ALL assertions about files must be inside the `with tempfile.TemporaryDirectory() as tmp:` block. The directory (and everything inside) is gone the moment the with block exits — `out.exists()` will return False even if the file was correctly written 1 line earlier.
+  - US-010 will add `backend/skills/get_weather/SKILL.md` with proper `name:` / `description:` frontmatter. After US-010 commits, re-running `python -m backend.skills_loader` (or whatever startup hook US-014 wires) will repopulate SKILLS_SNAPSHOT.md with the get_weather entry. The current committed SKILLS_SNAPSHOT.md (empty wrapper) is a placeholder that will be overwritten on first bootstrap with a real skill present.
+  - US-011 (prompt assembler) will read SKILLS_SNAPSHOT.md as the FIRST of 6 sections. The empty-wrapper output is well-formed XML and won't break concatenation; no special-case for "no skills" is needed in US-011.
+---
+
+## 2026-06-05 - US-010
+- Added the example `get_weather` Agent Skill so the skill loop is demonstrable end-to-end.
+- Files changed:
+  - `backend/skills/get_weather/SKILL.md` (new — YAML frontmatter `name: get_weather` + Chinese description; body documents two free-no-key flows: wttr.in `?format=j1` primary + Open-Meteo geocoding+forecast fallback, with concrete `fetch_url` URLs and `python_repl` snippets for JSON parsing).
+  - `backend/skills/.gitkeep` (deleted — real content now lives in `get_weather/`, follows US-001/US-003 "remove .gitkeep when seeding real files" convention).
+  - `backend/workspace/SKILLS_SNAPSHOT.md` (regenerated via `python -c "from backend.skills_loader import build_skills_snapshot; print(build_skills_snapshot())"` — now contains the `<skill>` entry for get_weather instead of the empty wrapper US-009 seeded).
+- Design notes:
+  - Body is in Chinese to match the SOUL.md/IDENTITY.md/USER.md/AGENTS.md voice — the agent's working language defaults to Chinese (per US-003 SOUL.md).
+  - The skill body **explicitly instructs the agent to call `fetch_url` first, then `python_repl`** — never to fabricate weather data. This is the contract that makes the "instruction-following" skill paradigm (PRD §3.1) work, and it doubles as a sanity check that the AGENTS.md SKILL PROTOCOL ("read the SKILL.md before acting") flows through to a real example.
+  - Chose `wttr.in?format=j1` as the primary path because it is the simplest free-no-key option that returns structured JSON. Open-Meteo is the documented fallback (two-step: geocode then forecast) for when wttr.in is rate-limited or down.
+  - No new code, no new tests — US-010 is content-only. The existing `backend/tests/test_skills_loader.py` cases (especially `test_emits_xml_for_discovered_skill`) already cover the discovery path that picks this skill up.
+- Verification:
+  - `/tmp/mini-openclaw-test-venv/bin/python -W ignore -m unittest discover -s backend/tests -v` → 25/25 OK (no regressions).
+  - Snapshot regeneration ran cleanly and emitted the expected XML:
+    ```
+    <available_skills>
+      <skill>
+        <name>get_weather</name>
+        <description>获取指定城市（或经纬度）的实时天气信息。使用免费的 wttr.in 或 Open-Meteo API，不需要 API Key。</description>
+        <location>./backend/skills/get_weather/SKILL.md</location>
+      </skill>
+    </available_skills>
+    ```
+- **Learnings for future iterations:**
+  - The `<description>` text from frontmatter is XML-escaped at snapshot-build time (`xml.sax.saxutils.escape`). Authors of future SKILL.md files don't need to manually escape `<`/`>`/`&` in the YAML — but they should avoid putting literal quotes inside YAML scalars without proper YAML quoting (e.g. wrap the value in double quotes if it contains `:` or `#`).
+  - When adding/removing/renaming SKILL.md files, manually regenerate `backend/workspace/SKILLS_SNAPSHOT.md` until US-014 wires a startup hook. The committed snapshot is part of the data baseline (US-011 will read it on agent startup) — leaving it stale would mean the agent's first prompt advertises a skill list that doesn't match disk.
+  - SKILL.md body content does NOT need to be markdown-headed (`#`, `##`, etc.) — it is read verbatim by the agent through `read_file`. But headings DO help when humans read it in the Inspector panel (US-023). Pick a format that reads well in both contexts.
+  - Default skill voice is Chinese; if a future skill targets English-only users, that is fine, but the SOUL.md persona will still answer the user in their language, not the skill's. The skill content language doesn't constrain the agent's reply language.
+  - PRD §3.1 / §3.2 distinction matters: skills are **instructions**, not function-call definitions. There is no `args_schema` for a skill; the agent reads SKILL.md and executes the documented procedure with core tools. Future stories adding skills should not be tempted to write Python files inside `skills/<name>/` — only markdown.
+---
+
+## 2026-06-05 - US-011
+- Implemented the System Prompt assembler that concatenates the six prompt source files in the PRD §4.2 order with per-file truncation.
+- Files changed:
+  - `backend/prompt_assembler.py` (new — `build_system_prompt() -> str`; reads `WORKSPACE_DIR` / `MEMORY_DIR` module-level constants; emits `# === <name> ===` headers; truncates over `MAX_FILE_CHARS = 20_000` with literal `...[truncated]` marker; missing files become `(file not found)` placeholder).
+  - `backend/tests/test_prompt_assembler.py` (new — 5 unittest cases: order, oversized-truncation, short-no-marker, missing-file placeholder, real-files smoke).
+- Design notes:
+  - Section order is hard-coded in `_section_paths()`. The pairs are `(display_name, absolute_path)` so the header always reads the friendly basename even if the path moves.
+  - `MAX_FILE_CHARS` and `TRUNCATION_MARKER` are module-level constants so tests assert the exact wording and future stories can extend the limit without rewriting the assembler. Truncation is a hard char-cap (`content[:limit] + TRUNCATION_MARKER`) — not whitespace-aware. The PRD specifies "append `...[truncated]`", which we take literally.
+  - `_load_file` swallows `OSError` and substitutes `MISSING_FILE_PLACEHOLDER`. This matches the US-008/US-009 graceful-empty pattern: the agent's first turn should never fail to start because one of the prompt files happened to be missing on disk.
+  - Sections are joined with a single blank line (`"\n\n".join(...)`) and the assembled string carries a final newline. Both downstream consumers (`create_agent`'s `system_prompt` in US-012, and the Inspector panel rendering in US-023) handle trailing whitespace correctly.
+- Verification:
+  - `python3 -m py_compile backend/prompt_assembler.py backend/tests/test_prompt_assembler.py` → clean (host Python 3.14).
+  - `/tmp/mini-openclaw-test-venv/bin/python -W ignore -m unittest backend.tests.test_prompt_assembler -v` → 5/5 OK in 0.005s.
+  - Full backend suite → 30/30 OK in 0.557s (no regressions across the 5 prior modules).
+- **Learnings for future iterations:**
+  - The header format is `# === <name> ===` (note the spaces around `===`). US-022 chat-stage UI and US-023 Inspector should NOT collapse this whitespace when rendering raw prompts — the equals padding is the documented separator per PRD §4.2 example.
+  - `build_system_prompt()` re-reads the source files on every call. That's intentional for v1 — users will edit MEMORY.md and SKILL.md files via the Inspector and expect the agent to pick up changes on the next request. US-014 (`/api/chat`) should call `build_system_prompt()` per request, not cache it. If caching is needed for performance, key on file `mtime` rather than introducing manual invalidation.
+  - `MAX_FILE_CHARS` is per-file, not aggregate. With 6 files at 20k each, the absolute upper bound on the assembled prompt is ~120k chars + 6 headers — well under typical model context windows (Claude/GPT-4o/etc. all comfortably handle this). If the aggregate ever becomes a concern, add a second-level cap in the assembler, not in callers.
+  - Test pattern for module-level path constants: define them at module top (`WORKSPACE_DIR = ...`) and reference the bare name inside functions. Then `with patch.object(pa_mod, 'WORKSPACE_DIR', tmp_workspace)` actually takes effect — same gotcha that US-008 documented for `KNOWLEDGE_DIR`. Default-arg captures (`def f(x=WORKSPACE_DIR)`) would freeze the value at definition time.
+  - Smoke test against committed files (`test_real_files_assemble_without_error`) is a cheap correctness check that catches "someone renamed a file in workspace/" regressions. Lightweight enough to keep as a permanent test.
+---
+
+## 2026-06-05 - US-012
+- Built the Mini-OpenClaw Agent via LangChain 1.x `create_agent` wired with the five core tools and the assembled System Prompt.
+- Files changed:
+  - `backend/graph/agent.py` (new — `build_agent(model=None) -> CompiledStateGraph`, `CORE_TOOLS` list, `_build_model()` env-driven `ChatOpenAI` factory).
+  - `backend/tests/test_agent.py` (new — 3 unittest cases: say-hello returns non-empty reply, all 5 core tool names registered, agent compiles without provider; uses a `_ToolBindingFakeChatModel` subclass that overrides `bind_tools` to return `self`).
+- Design notes:
+  - `from langchain.agents import create_agent` is the public 1.x entry point — confirmed re-exported in `langchain==1.3.4` (US-002 dep set). The factory returns a `CompiledStateGraph`; we treat it as opaque (no AgentExecutor / no `create_react_agent`, per US-012 acceptance criteria).
+  - `CORE_TOOLS = [terminal, python_repl, fetch_url, read_file, search_knowledge_base]` — module-level list so a future story (e.g. US-014 `/api/chat`) can iterate and report which tools are available without re-importing.
+  - `_build_model()` reads `OPENAI_API_KEY` (fallback `"EMPTY"` for local servers like LM Studio that ignore the key), `OPENAI_BASE_URL` (passed only if set so the upstream OpenAI default URL is preserved), `OPENAI_MODEL` (default `gpt-4o-mini`). This is the OpenAI-API-compatible surface the PRD §1.2 promises (OpenRouter / DeepSeek / Claude proxies all use the same shape).
+  - `build_agent(model=None)` accepts an injected model purely for tests — production callers omit it and let env vars drive the construction.
+  - System prompt is rebuilt fresh on every `build_agent()` call by delegating to `build_system_prompt()`. US-014 may want to cache the *agent* per-request anyway; do not pre-cache the prompt string.
+- Test wrinkles I hit:
+  - First test run failed at `request.model.bind_tools(...)` with `NotImplementedError` — `GenericFakeChatModel` inherits the base implementation that just raises. Fixed by subclassing and overriding `bind_tools` to return `self`. Don't try to monkeypatch the method on the instance (Pydantic v2 model rejects mutation, per the US-006 codebase pattern about Pydantic-protected attributes).
+  - `create_agent` returns a `dict` from `.invoke(...)`; the assistant reply is `result["messages"][-1].content`. The first message is the user input, intermediate are tool calls/results (none in our smoke test since the fake LLM returns a plain AIMessage with no tool_calls).
+- Verification:
+  - `python3 -m py_compile backend/graph/agent.py backend/tests/test_agent.py` → clean (host Python 3.14).
+  - `/tmp/mini-openclaw-test-venv/bin/python -W ignore -m unittest backend.tests.test_agent -v` → 3/3 OK in 0.007s.
+  - Full backend suite (`discover -s backend/tests`) → 33/33 OK in 0.538s (no regressions across the 6 prior modules).
+- **Learnings for future iterations:**
+  - The agent surface is `agent.invoke({"messages": [...]})` / `agent.astream({"messages": [...]})` / `agent.stream({"messages": [...]})`. US-014's SSE streaming will use `astream_events()` to surface `thought` / `tool_call` / `tool_result` / `final` events — the event types come from LangGraph's standard event taxonomy, not custom names.
+  - When mocking the LLM, override `bind_tools` to return `self` and use `iter([AIMessage(content=...)])` so the agent's first model call yields exactly one scripted reply. To force a tool-call path, pass `AIMessage(content="", tool_calls=[{"id": "...", "name": "<tool>", "args": {...}}])` — but our US-012 smoke test deliberately stays on the no-tool path to keep the seam tight.
+  - Env-var trio for OpenAI-compatible providers: `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_MODEL`. The PRD didn't pin specific names; these are the de-facto OpenAI SDK conventions that ChatOpenAI also reads natively (it would pick them up from `os.environ` even without our `_build_model()` plumbing, but the explicit read makes the contract greppable and gives us a single place to add a future fallback like a `.env` file).
+  - `langchain_openai.ChatOpenAI` exposes `base_url` / `api_key` as kwargs but stores them internally under the aliased fields `openai_api_base` / `openai_api_key`. Construction via either alias works in 1.2.x; we prefer the unaliased kwargs for readability.
+  - If you ever need to introspect what tools an agent was built with, do it via `agent.get_graph()` or the `CORE_TOOLS` module constant — there is no public `.tools` attribute on `CompiledStateGraph`. Keep `CORE_TOOLS` as the source of truth.
+---
+
+## 2026-06-05 - US-013
+- Implemented JSON-array session persistence for conversation history.
+- Files changed:
+  - `backend/sessions_store.py` (new — `load_session(name) -> list[dict[str, Any]]`, `append_message(name, message) -> list[dict[str, Any]]`, `_validate_session_name`, `_session_path`, `SESSIONS_DIR` module-level constant, `ALLOWED_ROLES = ('user', 'assistant', 'tool')`).
+  - `backend/tests/test_sessions_store.py` (new — 11 unittest cases across `LoadSessionTests`, `AppendMessageTests`, `SessionNameValidationTests`).
+- Design notes:
+  - Sessions live at `backend/sessions/{name}.json` as JSON arrays of message dicts (role + content + optional tool_calls / tool_call_id / name).
+  - `load_session` returns `[]` for missing, empty, or corrupt JSON files — never raises. This matches the US-008/US-009/US-011 "graceful-empty" pattern so a single bad session file can't crash agent startup.
+  - `append_message` lazily creates `SESSIONS_DIR` and the JSON file on first call (PRD criterion 4) and writes ATOMICALLY: serialize to `<file>.tmp` then `tmp.replace(path)`. A crash mid-write can't corrupt an existing session — the worst case is a stale `.tmp` left behind.
+  - JSON serialization uses `ensure_ascii=False, indent=2` so Chinese / emoji content stays human-readable in the file (matters because users will read these files via the future Inspector panel).
+  - `SESSIONS_DIR` is a module-level constant referenced bare inside `_session_path` so tests `patch.object(ss_mod, "SESSIONS_DIR", tmp_path)` actually take effect — per the Codebase Patterns US-008/US-011 entry.
+  - Session names are validated against `^[A-Za-z0-9._-]+$` AND special-cased against `"."` / `".."` / empty. Anything else raises `ValueError` BEFORE touching the filesystem. This prevents the caller (e.g. US-014's `/api/chat` request body) from escaping `SESSIONS_DIR` via `../something` or absolute paths. The validation is intentionally stricter than necessary — a future story can loosen it if there's a real need.
+  - Tests use `importlib.import_module("backend.sessions_store")` to grab the module for `patch.object`, NOT `from backend import sessions_store as ss_mod` (defensive — `backend/__init__.py` is empty today but the trick costs nothing).
+- Verification:
+  - `python3 -m py_compile backend/sessions_store.py backend/tests/test_sessions_store.py` → clean (host Python 3.14).
+  - `/tmp/mini-openclaw-test-venv/bin/python -W ignore -m unittest backend.tests.test_sessions_store -v` → 11/11 OK in 0.003s.
+  - Full backend suite (`discover -s backend/tests`) → 44/44 OK in 0.544s (no regressions across the 7 prior modules: terminal, python_repl, fetch_url, read_file, search_knowledge_base, skills_loader, prompt_assembler, agent).
+- **Learnings for future iterations:**
+  - For atomic JSON writes on POSIX, prefer `Path.write_text` to a `.tmp` sibling followed by `Path.replace`. `replace` is atomic on the same filesystem; do NOT cross fs boundaries (e.g. don't write the tmp file to `/tmp` and replace into the repo — that triggers a copy and loses atomicity).
+  - US-014 (`POST /api/chat`) will use `sessions_store.append_message` directly. Recommended sequence per request: (1) parse body, (2) `append_message(session_id, {"role": "user", "content": message})`, (3) invoke agent, (4) on `final` event, `append_message(session_id, {"role": "assistant", "content": final_text})`. For tool calls in the middle, append a `{"role": "tool", "name": ..., "tool_call_id": ..., "content": ...}` message after each `tool_result`. The store accepts the extra fields without modification.
+  - US-016 (`GET /api/sessions`) can compute `message_count` cheaply by `len(load_session(name))` — but for large directories that would re-parse every file. If perf matters, switch to `path.stat().st_size` + a 1-pass scan; for now, the simple route is fine.
+  - Session-name validation regex `^[A-Za-z0-9._-]+$` lets the UI generate session IDs like `2026-06-05_main` or `session.1` without re-encoding. If a future story wants UUIDs, those already match (`hex` + dashes). Do NOT introduce slugification client-side — that would mask traversal attempts.
+  - Don't read the JSON twice in append_message; we already call `load_session` (which handles missing/corrupt cases) and then write the full extended list back. That keeps the atomic-write logic in one place at the cost of one extra parse per append — acceptable given that sessions stay small (< 100 messages each in practice).
+  - If a future story needs to DELETE messages or rewrite history, expose a `replace_session(name, messages)` helper rather than letting callers reach into `_session_path`. Keep the module's surface minimal: load + append are the only verbs the agent loop needs.
+---
+
+## 2026-06-05 01:46:19 CST - US-014
+- Implemented `POST /api/chat` in `backend/app.py` with request parsing, SSE streaming, and non-stream JSON replies.
+- Files changed:
+  - `backend/app.py` (`ChatRequest`, SSE event adapter, `/api/chat` route, final-reply extraction helpers)
+  - `backend/tests/test_api_chat.py` (new — FastAPI `TestClient` integration coverage for stream and non-stream modes with mocked agents)
+- Verification:
+  - `python3 -m py_compile backend/app.py backend/tests/test_api_chat.py` → clean.
+  - `/tmp/mini-openclaw-test-venv/bin/python -W ignore -m unittest backend.tests.test_api_chat -v` → 2/2 OK.
+  - `/tmp/mini-openclaw-test-venv/bin/python -W ignore -m unittest discover -s backend/tests -v` → 46/46 OK.
+- **Learnings for future iterations:**
+  - `create_agent(...).astream_events(version="v2")` does not natively emit the PRD's `thought` / `tool_call` / `tool_result` / `final` names. The API layer should normalize raw LangChain events (`on_tool_start`, `on_tool_end`, `on_chat_model_stream`) into the frontend contract instead of coupling the UI to LangChain internals.
+  - For SSE tests with `TestClient`, assert on `response.text` event blocks and keep any tempdir-backed file reads inside the `TemporaryDirectory()` context. The session JSON file is removed as soon as the context exits.
+  - Mixed SSE/dict endpoints need `response_model=None` on the FastAPI route decorator; otherwise startup fails while FastAPI tries to build a Pydantic model from `EventSourceResponse | dict[...]`.
+---
+
+## 2026-06-05 02:58:19 CST - US-015
+- Implemented `GET /api/files` and `POST /api/files` in `backend/app.py` for reading and saving files under the allowed `backend/memory`, `backend/workspace`, and `backend/skills` roots.
+- Files changed:
+  - `backend/app.py` (added file-path allowlist resolution, `FileWriteRequest`, and the two `/api/files` endpoints)
+  - `backend/tests/test_api_files.py` (new — integration coverage for successful read, successful write, and rejected traversal/outside-root requests)
+- Verification:
+  - `python3 -m py_compile backend/app.py backend/tests/test_api_files.py` → clean.
+  - `/tmp/mini-openclaw-test-venv/bin/python -W ignore -m unittest backend.tests.test_api_files -v` → 3/3 OK.
+  - `/tmp/mini-openclaw-test-venv/bin/python -W ignore -m unittest discover -s backend/tests -v` → 49/49 OK.
+- **Learnings for future iterations:**
+  - The file API uses a stricter allowlist than the project-root tool sandbox: only `backend/memory`, `backend/workspace`, and `backend/skills` are writable/readable over HTTP. Keep the API-layer check separate from tool-level root guards.
+  - When tests patch `PROJECT_ROOT` and `ALLOWED_FILE_ROOTS`, `_resolve_allowed_file_path()` must re-resolve each allowed root before `relative_to(...)`; otherwise absolute tempdir candidates compared against relative repo roots yield false 403s.
+  - The endpoints currently echo `{path, content}` after writes, which matches the PRD and keeps the frontend save flow simple for US-018/US-023.
+---
+
+## 2026-06-05 02:58:19 CST - US-016
+- Implemented `GET /api/sessions` in `backend/app.py` to list session JSON files as `{name, last_modified, message_count}` for the sidebar.
+- Files changed:
+  - `backend/app.py` (added `_session_metadata()` and the `/api/sessions` endpoint; reads session storage through `backend.sessions_store` at call time so patched storage roots stay in sync)
+  - `backend/tests/test_api_sessions.py` (new — integration coverage for seeded two-session listing and missing-directory empty response)
+- Verification:
+  - `python3 -m py_compile backend/app.py backend/tests/test_api_sessions.py` → clean.
+  - `/tmp/mini-openclaw-test-venv/bin/python -W ignore -m unittest backend.tests.test_api_sessions -v` → 2/2 OK.
+  - `/tmp/mini-openclaw-test-venv/bin/python -W ignore -m unittest discover -s backend/tests -v` → 51/51 OK.
+- **Learnings for future iterations:**
+  - If an API route needs to honor monkey-patched session storage in tests, import the module (`from backend import sessions_store`) and read `sessions_store.SESSIONS_DIR` / `sessions_store.load_session(...)` at request time. Importing the names directly into `backend.app` freezes the old bindings and breaks tempdir-backed tests.
+  - `last_modified` is currently the file mtime serialized as a UTC ISO-8601 string. Frontend code for US-021 can treat it as an opaque timestamp string and format it client-side.
+  - Frontend stories should use `npm --prefix frontend <command>` from the repo root instead of relying on `cd frontend`; it keeps commands consistent with the backend workflow and works cleanly in automation/hooks.
+- Next.js rewrites `frontend/next-env.d.ts` during build/dev startup. Treat it as generated state and let the framework own its exact comment block.
+- For frontend dependency verification here, `npm run typecheck --prefix frontend`, `npm run build --prefix frontend`, and an HTTP 200 from `npm run dev --prefix frontend` on localhost are the practical acceptance checks. `npm install` may emit upstream deprecation or audit warnings; only treat non-zero exits as blockers.
+
+## 2026-06-05 11:45:58 CST - US-017
+- Scaffolded `frontend/` as a Next.js 14 App Router project with strict TypeScript, Tailwind CSS, shadcn-compatible config, and lucide-react.
+- Files changed:
+  - `frontend/package.json`, `frontend/package-lock.json`, `frontend/tsconfig.json`, `frontend/next.config.mjs`, `frontend/next-env.d.ts`, `frontend/postcss.config.js`, `frontend/tailwind.config.ts`, `frontend/.gitignore`
+  - `frontend/components.json`
+  - `frontend/src/app/layout.tsx`, `frontend/src/app/page.tsx`, `frontend/src/app/globals.css`
+  - `frontend/src/lib/utils.ts`
+  - `frontend/src/components/ui/button.tsx`, `frontend/src/components/ui/input.tsx`, `frontend/src/components/ui/dropdown-menu.tsx`
+- Verification:
+  - `npm run typecheck --prefix /Users/alice/LLM-learning/mini-openclaw/frontend` → clean.
+  - `npm run build --prefix /Users/alice/LLM-learning/mini-openclaw/frontend` → succeeds on Next.js 14.2.35.
+  - `npm run dev --prefix /Users/alice/LLM-learning/mini-openclaw/frontend` → starts cleanly on `http://localhost:3000`; `curl -I http://127.0.0.1:3000` returned `HTTP/1.1 200 OK`.
+- **Learnings for future iterations:**
+  - Shadcn setup in this repo is file-based, not CLI-managed: keep `components.json`, `src/lib/utils.ts`, and the `src/components/ui/*` primitives in sync when adding more components.
+  - Pin `next` and `eslint-config-next` together to the same patch version. `next@14.2.33` currently emits an upstream security warning during install; `14.2.35` is the patched 14.2 line.
+  - The current scaffold uses `@/*` path aliases from `frontend/tsconfig.json`; future frontend stories should import through that alias instead of long relative paths.
+  - Manual browser verification still needs a real browser tool. For this story I verified the runtime by starting the dev server and checking the HTTP response only.
+---
+
+## 2026-06-10 23:16:50 CST - US-018
+- Built `frontend/src/lib/api.ts` as the typed frontend client for the backend on port 8002.
+- Files changed:
+  - `frontend/src/lib/api.ts` (new — exports `streamChat`, `getFile`, `saveFile`, `listSessions`, typed SSE event unions, shared base-URL helper, and HTTP error handling without `any`)
+- Verification:
+  - `npm run typecheck --prefix /Users/alice/LLM-learning/mini-openclaw/frontend` → clean.
+  - `npm run build --prefix /Users/alice/LLM-learning/mini-openclaw/frontend` → succeeds on Next.js 14.2.35.
+- **Learnings for future iterations:**
+  - The chat API is POST-only, so frontend streaming must use `fetch()` with `response.body.getReader()` and manual SSE frame parsing; browser `EventSource` cannot send the required request body.
+  - Keep frontend API responses typed as small transport-layer shapes (`FilePayload`, `SessionSummary`, `ChatEvent`) and normalize backend quirks at the edge so UI stories can consume a stable union type.
+  - `new URL(path, API_BASE_URL)` is the safest way to join frontend API paths because it handles both bare origins and slash-suffixed environment overrides without double-slash bugs.
+  - Manual browser verification was not needed for this story because it adds a library module only; build + typecheck were the relevant acceptance checks.
+---
+
+## 2026-06-10 23:39:58 CST - US-019
+- Implemented the three-column IDE shell in the frontend landing page with a fixed left rail, dominant center stage, and desktop-only inspector rail over a frosted `#fafafa` surface.
+- Files changed:
+  - `frontend/src/app/page.tsx` (replaced the scaffold hero with the IDE-style shell layout, placeholder session list, stage content, and inspector preview)
+  - `frontend/src/app/globals.css` (retuned theme tokens and page background to match the frosty glass treatment)
+- Verification:
+  - `npm run typecheck --prefix frontend` → clean.
+  - `npm run build --prefix frontend` → succeeds on Next.js 14.2.35.
+  - `npm run dev --prefix frontend` started on `http://localhost:3001` because port 3000 was already occupied; `curl -I http://127.0.0.1:3001` returned `HTTP/1.1 200 OK`.
+- **Learnings for future iterations:**
+  - The current page shell already reserves the structural slots US-020/021/022/023 need, so those stories should layer behavior onto the existing sidebar/stage/inspector sections instead of rebuilding the page frame.
+  - Using `xl:grid-cols-[240px_minmax(0,1fr)_420px]` with `hidden xl:flex` on the inspector is the simplest way to satisfy the responsive-collapse requirement for v1 without adding a draggable-resize system yet.
+  - Manual browser verification used the local dev server only; a real browser/MCP visual check is still needed in a later UI pass if that tooling becomes available.
+---
+
+## 2026-06-11 00:34:00 CST - US-020
+- Implemented a fixed frosted top navigation bar above the existing three-column shell with Klein Blue branding and the required external link.
+- Files changed:
+  - `frontend/src/app/page.tsx` (added the fixed glass nav, adjusted top padding/min-height so the workspace shell clears it, preserved the existing three-column layout)
+  - `scripts/ralph/prd.json` (marked US-020 as passing)
+  - `scripts/ralph/progress.txt` (added a reusable shell-layout pattern and this progress entry)
+- Verification:
+  - `npm run typecheck --prefix /Users/alice/LLM-learning/mini-openclaw/frontend` -> clean.
+  - `npm run build --prefix /Users/alice/LLM-learning/mini-openclaw/frontend` -> succeeds on Next.js 14.2.35.
+  - `npm run dev --prefix /Users/alice/LLM-learning/mini-openclaw/frontend -- --port 3002` -> starts cleanly; `curl -I http://127.0.0.1:3002` returned `HTTP/1.1 200 OK`.
+- **Learnings for future iterations:**
+  - The fixed top nav works best as a sibling above the main frosted workspace card, not inside it; otherwise the card border and blur stack awkwardly when the page scrolls.
+  - When adding persistent top chrome to this shell, adjust page top padding and shell min-height together so the viewport math stays correct across desktop and mobile breakpoints.
+  - Manual browser verification still needs a real browser/MCP visual pass; this iteration validated the live page via the local dev server only.
+---
+
+## 2026-06-11 00:47:55 CST - US-022
+- Implemented the center chat stage with a real message transcript, live SSE streaming via `streamChat()`, and per-assistant collapsible reasoning blocks that group `thought`, `tool_call`, and `tool_result` events above the final reply.
+- Files changed:
+  - `frontend/src/app/page.tsx` (replaced the static stage mock with session-scoped message state, submit handling, streaming updates, collapsible trace rendering, disabled send state, and inline stream-error handling)
+  - `scripts/ralph/prd.json` (marked US-022 as passing)
+  - `scripts/ralph/progress.txt` (added a reusable chat-stage state pattern and this progress entry)
+- Verification:
+  - `npm run typecheck --prefix /Users/alice/LLM-learning/mini-openclaw/frontend` -> clean.
+  - `npm run build --prefix /Users/alice/LLM-learning/mini-openclaw/frontend` -> succeeds on Next.js 14.2.35.
+  - `npm run dev --prefix /Users/alice/LLM-learning/mini-openclaw/frontend -- --port 3003` -> starts cleanly; `curl -I http://127.0.0.1:3003` returned `HTTP/1.1 200 OK`.
+- **Learnings for future iterations:**
+  - The chat stage can keep transcript state local to `frontend/src/app/page.tsx` until the inspector needs to read or edit the same messages; there is still no need for a global store before US-023.
+  - For streaming UX, create the assistant bubble before the first SSE event arrives and mutate that same bubble as events land; this prevents layout jumps and keeps the collapsible trace bound to the final answer.
+  - `details`/`summary` is enough for the v1 collapsible trace block and stays collapsed by default without extra React state.
+  - Manual browser verification used the local dev server plus HTTP response only; a real interactive browser pass is still pending because no browser/MCP tool is available here.
+---
+
+## 2026-06-11 - US-023
+- Built the Inspector panel with a Monaco markdown editor, file picker, load/save integration, and toast feedback.
+- Files changed:
+  - frontend/src/app/page.tsx
+  - frontend/src/components/monaco-markdown-editor.tsx
+  - frontend/package.json
+  - frontend/package-lock.json
+- Verification:
+  - npm run typecheck --prefix /Users/alice/LLM-learning/mini-openclaw/frontend
+  - npm run build --prefix /Users/alice/LLM-learning/mini-openclaw/frontend
+- **Learnings for future iterations:**
+  - Monaco should be wrapped in a client-only dynamic import (`ssr: false`) to avoid Next.js server rendering issues.
+  - File-editor save UX is simple and reliable when the page owns the selected path, current buffer, and toast lifecycle directly.
+  - Cmd/Ctrl+S can be supported both with a global keydown listener and Monaco command binding for a consistent editor feel.
+---
+
+## 2026-06-17 评测 / US-101
+- Implemented an offline evaluation runner and a 20-task seed dataset for Mini-OpenClaw.
+- Files changed:
+  - `scripts/ralph/prd.json` (rewrote the Ralph task list to the new improvement plan and marked US-101 complete)
+  - `backend/evals/__init__.py` (new)
+  - `backend/evals/runner.py` (new — dataset loader, metrics aggregation, JSON report writer, CLI entrypoint)
+  - `backend/evals/datasets/core_tasks.json` (new — 20 seed tasks covering file reading, skills, terminal, multi-turn context, and knowledge retrieval)
+  - `backend/knowledge/eval_agent_notes.md` (new — knowledge note for the eval demo and interview positioning)
+  - `backend/tests/test_eval_runner.py` (new — tests for loading, aggregation, and output writing)
+- **Learnings for future iterations:**
+  - Offline evals should stay file-based and runnable from the repo root so they fit the project’s local-first philosophy.
+  - A small seed dataset is enough to prove the product shape early; the runner can later be swapped to real agent execution without changing the reporting contract.
+  - `python -m backend.evals.runner` is the right CLI shape for future automation, but `backend/evals/__init__.py` should stay import-light to avoid package preload warnings.
+---
+
+## 2026-06-17 评测 / US-102
+- Added file-based eval profiles and Markdown report generation for ablation analysis.
+- Files changed:
+  - `backend/evals/runner.py` (profile loading/selection, multi-profile execution, ablation comparison, Markdown rendering)
+  - `backend/evals/profiles.json` (new baseline/no_memory/no_skills/no_retrieval profile config)
+  - `backend/tests/test_eval_runner.py` (new tests for profiles, comparison, and Markdown output)
+  - `scripts/ralph/prd.json` (marked US-102 complete)
+- **Learnings for future iterations:**
+  - Eval profile config should stay data-driven in JSON so future capability toggles can be added without editing the runner contract.
+  - Keep the JSON report as the machine-readable source of truth and derive Markdown from it; that avoids report drift when we later plug in real agent execution.
+  - Backward compatibility matters here: custom evaluators may still accept only `(task)`, so the runner now adapts to evaluators that accept either `(task)` or `(task, profile)`.
+---
+
+## 2026-06-17 可观测性 / US-103
+- Added local JSON trace persistence for `/api/chat` in both streaming and non-streaming paths.
+- Files changed:
+  - `backend/traces_store.py` (new — trace creation, event append, finalize, save/load helpers)
+  - `backend/app.py` (chat routes now create trace_id, append events, persist success/error traces)
+  - `backend/tests/test_traces_store.py` (new — trace roundtrip and failure accounting)
+  - `backend/tests/test_api_chat.py` (expanded — success + failure trace coverage)
+  - `scripts/ralph/prd.json` (marked US-103 complete)
+- **Learnings for future iterations:**
+  - Trace persistence should live in a dedicated store module instead of being embedded in route code; that makes upcoming trace list/detail APIs much easier to add.
+  - For chat observability, keep a normalized `events` list as the source of truth and derive `tool_calls` / `tool_failures` as convenience indexes in the same payload.
+  - Tests that assert model metadata should follow the resolved environment default instead of hard-coding one model name, because this repo already runs under different OpenAI-compatible providers.
+---
+
+## 2026-06-17 可观测性 / US-104
+- Added trace summary/detail APIs on top of the local JSON trace store.
+- Files changed:
+  - `backend/app.py` (new `/api/traces` list endpoint and `/api/traces/{trace_id}` detail endpoint)
+  - `backend/tests/test_api_traces.py` (new integration tests for list/detail/404)
+  - `scripts/ralph/prd.json` (marked US-104 complete)
+- **Learnings for future iterations:**
+  - The trace detail API can return the raw persisted payload directly because the trace store already normalizes the event shape; no extra DTO layer is needed yet.
+  - For reverse-chronological trace lists, sorting filenames is not enough long-term; today it works because we only need a light local view, but future iterations should sort by parsed `start_time` if we add pagination or cross-process writes.
+---
+
+## 2026-06-17 可观测性 / US-105
+- Added a frontend runtime diagnostics panel wired to the trace summary/detail APIs and verified it in the in-app browser.
+- Files changed:
+  - `frontend/src/lib/api.ts` (added typed `listTraces` / `getTrace` helpers)
+  - `frontend/src/app/page.tsx` (added runtime diagnostics panel, trace loading state, trace selection, and trace detail rendering)
+  - `backend/tests/test_api_traces.py` (cleaned seeded test data used while validating the diagnostics flow)
+  - `scripts/ralph/prd.json` (marked US-105 complete)
+- **Learnings for future iterations:**
+  - UI stories that depend on freshly added backend endpoints need a real local service restart before browser verification; typecheck passing is not enough when the app was already running.
+  - The diagnostics rail works best as a session-adjacent panel: keep chat centered, diagnostics immediately beside it, and file editing further right so runtime state is visible without burying the conversation.
+---
+
+## 2026-06-17 隔离 / US-106
+- Added minimal user-level storage isolation with `X-User-ID` for sessions and editable file roots.
+- Files changed:
+  - `backend/user_state.py` (new — user id normalization and per-user root helpers)
+  - `backend/sessions_store.py` (user-scoped session paths)
+  - `backend/app.py` (reads `X-User-ID`, scopes sessions/files to `backend/data/users/{user_id}/...`)
+  - `backend/tests/test_user_isolation.py` (new — session and workspace isolation coverage)
+  - `scripts/ralph/prd.json` (marked US-106 complete)
+- **Learnings for future iterations:**
+  - Minimal multi-user isolation is easiest when storage path resolution is centralized in a dedicated helper module; route handlers and stores should consume that instead of assembling paths ad hoc.
+  - Shared assets like `backend/skills/` can stay global while mutable user-facing state moves under `backend/data/users/{user_id}/...`; that keeps the product model simple without blocking later SaaS-style growth.
+---
+
+## 2026-06-18 并发 / US-107
+- Added per-user async write serialization for chat sessions and mutable file saves.
+- Files changed:
+  - `backend/user_locks.py` (new — in-process `asyncio.Lock` registry keyed by `user_id`)
+  - `backend/app.py` (chat/file writes now flow through user-scoped async lock helpers; named users map `backend/memory/*` and `backend/workspace/*` into user roots while anonymous traffic keeps the legacy shared paths)
+  - `backend/sessions_store.py` (anonymous/default sessions remain on `backend/sessions`, named users stay isolated under `backend/data/users/{user_id}/sessions`)
+  - `backend/tests/test_user_locks.py` (new — same-user session serialization, same-user file serialization, and cross-user parallelism)
+  - `backend/tests/test_api_chat.py` / `backend/tests/test_api_files.py` (updated to reflect the user-scoped storage behavior without regressing anonymous flows)
+- **Learnings for future iterations:**
+  - Per-user locks work best one layer above disk helpers: keep `sessions_store` synchronous and wrap it at the API/service boundary so future call sites can opt in without rewriting the persistence module.
+  - Preserving the anonymous single-user path is important when a repo already has legacy frontends and tests; named-user isolation can be added incrementally without forcing every file/session caller to understand the new storage layout.
+  - Focused concurrency tests are much easier to reason about when they assert overlap/non-overlap directly instead of trying to infer safety only from final file contents.
+---
+
+## 2026-06-18 失败处理 / US-108
+- Added categorized runtime failures, friendly API fallbacks, and lightweight retry handling.
+- Files changed:
+  - `backend/runtime_errors.py` (new — maps runtime exceptions into `tool_timeout`, `tool_invalid_input`, `model_invalid_format`, `memory_read_failure`, `knowledge_retrieval_failure`, `max_iterations_exceeded` plus retry policy)
+  - `backend/app.py` (chat routes now classify failures, attach friendly payloads to JSON/SSE responses, retry recoverable pre-output failures once, and persist category metadata onto traces)
+  - `backend/traces_store.py` (stores top-level error metadata and retry count alongside events)
+  - `backend/tests/test_runtime_errors.py` (new — category and retry-policy coverage)
+  - `backend/tests/test_api_chat.py`, `backend/tests/test_api_traces.py`, `backend/tests/test_traces_store.py` (expanded failure-path and trace-metadata coverage)
+  - `frontend/src/lib/api.ts`, `frontend/src/app/page.tsx` (frontend now surfaces backend friendly error text and shows error category / retry info in diagnostics)
+- **Learnings for future iterations:**
+  - Centralizing runtime classification in its own module keeps route handlers readable and makes category drift much less likely as more tools are added.
+  - One-shot retries should be reserved for recoverable failures before any streamed output is emitted; once the user has already seen partial output, silently replaying the run is more confusing than helpful.
+  - Trace summaries need top-level failure metadata, not just raw event logs, otherwise the diagnostics panel has to reverse-engineer failure state from tool-result payloads.
+---
+
+## 2026-06-18 回归 / US-109
+- Expanded boundary regression coverage and documented the failure matrix.
+- Files changed:
+  - `backend/tests/test_terminal.py` (invalid shell command now has explicit regression coverage)
+  - `backend/tests/test_api_files.py` (missing allowed file now asserts the frontend-visible `404 file not found` payload)
+  - `backend/tests/test_fetch_url.py`, `backend/tools/fetch_url.py` (HTML/Markdown parse failures now degrade to a friendly message)
+  - `backend/tests/test_search_knowledge_base.py`, `backend/tools/search_knowledge_base.py` (empty retrieval results covered; embedding setup now falls back to mock embeddings when optional OpenAI embedding extras are missing)
+  - `docs/failure-matrix.md` (new — repo-level matrix of failure modes, expected behavior, and test coverage)
+- **Learnings for future iterations:**
+  - Boundary stories are a good place to harden optional-dependency behavior; making the knowledge-search path degrade to mock embeddings turned a flaky environment dependency into a deterministic local default.
+  - For local-agent products, “frontend-visible failure payload” often just means “don’t return an empty spinner state” — lightweight `404`/friendly-message assertions carry a lot of value.
+  - A small failure matrix doc helps future stories stay honest about which edge cases are intentionally handled versus merely not yet tested.
+---
+
+## 2026-06-18 演示包 / US-110
+- Added a hiring-facing interview assistant vertical demo pack.
+- Files changed:
+  - `backend/knowledge/interview/interview_demo_pack.md`, `backend/knowledge/interview/interview_question_bank.md` (focused interview-prep knowledge pack)
+  - `backend/skills/interview_answer_builder/SKILL.md`, `backend/skills/resume_story_coach/SKILL.md` (dedicated interview/resume skills)
+  - `backend/workspace/INTERVIEW_DEMO.md` (seeded demo prompts, live flow, screenshot checklist)
+  - `backend/workspace/SKILLS_SNAPSHOT.md` (regenerated to include the new interview skills)
+  - `docs/interview-demo-pack.md` (demo workflow and screenshot checklist)
+  - `frontend/src/app/page.tsx` (Interview Demo prompt launcher plus inspector access to the new assets)
+- **Learnings for future iterations:**
+  - A vertical demo becomes much more believable when the knowledge, skills, prompts, and UI entry points all exist in the repo instead of living only in a spoken demo script.
+  - Frontend “seed prompt” affordances are a cheap way to make a demo repeatable; they reduce setup friction and help reviewers discover the intended scenario quickly.
+  - Regenerating `SKILLS_SNAPSHOT.md` is part of shipping any new skill content, not just core agent features; otherwise the prompt surface can drift from what the repo actually exposes.
+---
+
+## 2026-07-05 Graph-assisted RAG / US-111
+- Added a lightweight file-backed graph index for agent knowledge.
+- Files changed:
+  - `backend/graph/index.py` (new — extracts document, skill, workspace_file, trace, tool, concept, and heading nodes; emits contains/references/uses_tool/failed_at/mentions edges; persists deterministic JSON)
+  - `backend/tests/test_graph_index.py` (new — extraction, deterministic persistence, empty-source, and rebuild coverage)
+  - `.gitignore` (ignores generated `backend/data/graph/` runtime graph output)
+  - `scripts/ralph/prd.json` (added US-111..US-114 Graph-assisted RAG stories and marked US-111 complete)
+- Verification:
+  - `.venv/bin/python -W ignore -m unittest backend.tests.test_graph_index -v` -> 4/4 OK
+  - `.venv/bin/python -W ignore -m unittest backend.tests.test_search_knowledge_base backend.tests.test_traces_store -v` -> 8/8 OK
+  - `.venv/bin/python -m backend.graph.index` -> wrote 168 nodes and 197 edges to `backend/data/graph/knowledge_graph.json`
+- Notes:
+  - Ralph child process could not run in sandbox because Codex needed to write `~/.codex`; escalated Ralph was rejected because the script can commit/push automatically. This story was completed manually using the same one-story Ralph workflow, without pushing.
+- **Learnings for future iterations:**
+  - Keep Graph RAG lightweight and inspectable: a deterministic JSON graph is enough for interview/demo value before introducing external graph databases.
+  - Graph index modules should keep source roots patchable at module level so tests can use temp directories without touching real knowledge, skills, workspace, or trace files.
+  - Generated graph output belongs under `backend/data/graph/` and should stay gitignored; source code and tests prove the graph can be rebuilt.
+---
+
+## 2026-07-05 Graph-assisted RAG / US-112
+- Added optional graph-assisted expansion to `search_knowledge_base` while preserving baseline retrieval by default.
+- Files changed:
+  - `backend/graph/index.py` (added graph loading, summary, and query-neighborhood expansion helpers)
+  - `backend/tools/search_knowledge_base.py` (added `use_graph` parameter and direct-match plus graph-expanded evidence formatting)
+  - `backend/tests/test_search_knowledge_base.py` (added graph mode, missing graph, and baseline preservation coverage)
+  - `scripts/ralph/prd.json` (marked US-112 complete)
+- Verification:
+  - `.venv/bin/python -W ignore -m unittest backend.tests.test_search_knowledge_base -v` -> 7/7 OK
+  - `.venv/bin/python -W ignore -m unittest backend.tests.test_graph_index -v` -> 4/4 OK
+- **Learnings for future iterations:**
+  - Graph-assisted retrieval should be opt-in at the tool boundary until demos prove it is consistently better than baseline retrieval.
+  - Returning direct matches and graph-expanded evidence as separate sections keeps the behavior explainable for interview demos and future trace UI.
+---
+
+## 2026-07-05 Graph-assisted RAG / US-113
+- Exposed graph diagnostics through backend APIs and the existing trace panel.
+- Files changed:
+  - `backend/app.py` (added `GET /api/graph` and `GET /api/graph/nodes/{node_id}`)
+  - `backend/traces_store.py` (initialized `graph_retrieval` metadata on new traces)
+  - `frontend/src/lib/api.ts` (added graph diagnostic types and graph API helpers)
+  - `frontend/src/app/page.tsx` (shows graph retrieval metadata or a neutral empty state in the trace panel)
+  - `backend/tests/test_api_traces.py` (added graph summary/detail/missing-node API coverage)
+  - `scripts/ralph/prd.json` (marked US-113 complete)
+- Verification:
+  - `.venv/bin/python -W ignore -m unittest backend.tests.test_api_traces backend.tests.test_traces_store backend.tests.test_graph_index -v` -> 13/13 OK
+  - `npm run typecheck --prefix frontend` -> PASS
+- **Learnings for future iterations:**
+  - Graph diagnostics fit naturally into the existing trace panel as metadata; they do not need a separate product surface yet.
+  - Keep graph summary/detail APIs read-only and tolerant of missing graph files so local demos do not fail before a graph rebuild.
+---
+
+## 2026-07-05 Graph-assisted RAG / US-114
+- Added a Graph-RAG-inspired eval and interview narrative without overselling the implementation.
+- Files changed:
+  - `backend/evals/datasets/core_tasks.json` (added five `graph_retrieval` multi-hop tasks)
+  - `backend/evals/profiles.json` (added `no_graph_retrieval` ablation profile)
+  - `backend/evals/runner.py` (added graph retrieval capability aliases and a Markdown report section for graph tasks)
+  - `backend/tests/test_eval_runner.py` (added dataset/profile/report coverage for graph-assisted retrieval)
+  - `docs/interview-demo-pack.md` and `backend/workspace/INTERVIEW_DEMO.md` (added concise Graph-RAG-inspired explanation and diagnostics checklist items)
+  - `scripts/ralph/prd.json` (marked US-114 complete)
+- Verification:
+  - `.venv/bin/python -W ignore -m unittest backend.tests.test_eval_runner -v` -> 12/12 OK
+  - `.venv/bin/python -W ignore -m unittest backend.tests.test_eval_runner backend.tests.test_graph_index backend.tests.test_search_knowledge_base backend.tests.test_api_traces backend.tests.test_traces_store -v` -> 32/32 OK
+  - `.venv/bin/python -m backend.evals.runner --dataset backend/evals/datasets/core_tasks.json --output /tmp/mini-openclaw-graph-eval.json` -> wrote JSON and Markdown reports with 25 tasks and 5 profiles
+- **Learnings for future iterations:**
+  - The strongest interview phrasing is “graph-assisted retrieval over local files and traces,” not “full GraphRAG.”
+  - Eval tasks should encode the multi-hop situations where graph expansion is expected to help; otherwise graph retrieval looks like unnecessary architectural ornament.
+  - Demo checklists need an observable UI artifact, such as graph retrieval diagnostics, so the feature is visible rather than only described.
+---
+
+## 2026-07-11 Retrieval quality metrics / US-115
+- Added deterministic retrieval-quality evaluation for baseline vs graph-assisted retrieval.
+- Files changed:
+  - `backend/evals/datasets/retrieval_quality.json` (new labeled multi-hop retrieval dataset with relevant evidence ids and per-strategy ranked candidates)
+  - `backend/evals/runner.py` (loads retrieval eval cases, computes Recall@K/MRR/Hit@1/nDCG@K, adds JSON and Markdown comparison output)
+  - `backend/tests/test_eval_runner.py` (metric math, dataset loading, aggregation, and Markdown rendering coverage)
+  - `scripts/ralph/prd.json` (marked US-115 complete)
+- Verification:
+  - `.venv/bin/python -W ignore -m unittest backend.tests.test_eval_runner -v` -> 18/18 OK
+  - `.venv/bin/python -m backend.evals.runner --dataset backend/evals/datasets/core_tasks.json --output /tmp/mini-openclaw-retrieval-eval.json` -> wrote JSON and Markdown reports with retrieval-quality metrics
+  - JSON spot check: baseline Recall@K 0.3000 vs graph_assisted Recall@K 1.0000; graph_assisted nDCG@K delta +0.5623
+- **Learnings for future iterations:**
+  - Interview-friendly Graph RAG should be measurable with simple retrieval metrics, not just presented as architecture.
+  - Keeping the first retrieval eval offline and deterministic makes it safe for CI and demos; live retriever wiring can come later without changing the metric contract.
+  - Recall@K and nDCG@K are better signals for graph expansion than Hit@1 when baseline already finds one obvious direct document.
+---
+
+## 2026-07-11 Python REPL subprocess sandbox / US-116
+- Hardened `python_repl` by moving execution out of the backend process.
+- Files changed:
+  - `backend/tools/python_repl.py` (subprocess execution with isolated Python mode, temp cwd, minimized env, timeout, best-effort CPU/memory limits, and AST guardrails)
+  - `backend/tests/test_python_repl.py` (added blocked filesystem-write and timeout coverage)
+  - `scripts/ralph/prd.json` (marked US-116 complete)
+- Verification:
+  - `.venv/bin/python -W ignore -m unittest backend.tests.test_python_repl -v` -> 5/5 OK
+  - `.venv/bin/python -W ignore -m unittest backend.tests.test_python_repl backend.tests.test_agent backend.tests.test_runtime_errors -v` -> 16/16 OK
+- **Learnings for future iterations:**
+  - On macOS, CPU limits may terminate tight loops before wall-clock timeout fires; map that signal to the same friendly timeout result.
+  - A lightweight AST denylist is not a perfect sandbox, but it materially improves the demo story before investing in container/chroot/seccomp isolation.
+  - Keeping math and similar safe imports working preserves the useful REPL behavior while blocking filesystem and process operations.
+---
+
+## 2026-07-11 Runtime configuration center / US-117
+- Added typed runtime configuration without introducing a new dependency.
+- Files changed:
+  - `backend/settings.py` (new Pydantic `RuntimeSettings` with `.env` and environment variable loading)
+  - `backend/app.py` (uses settings for CORS, project roots, model name, host, and port)
+  - `backend/graph/agent.py` (uses settings for OpenAI-compatible provider defaults)
+  - `backend/graph/index.py` (uses settings for graph/source directories and graph output path)
+  - `backend/tools/search_knowledge_base.py` (uses settings for knowledge/storage paths and retrieval top-k)
+  - `backend/tools/python_repl.py` (uses settings for timeout and memory limit)
+  - `backend/tests/test_settings.py` (defaults and env override coverage)
+  - `docs/runtime-configuration.md` (demo-facing env var reference)
+  - `scripts/ralph/prd.json` (marked US-117 complete)
+- Verification:
+  - `.venv/bin/python -W ignore -m unittest backend.tests.test_settings backend.tests.test_search_knowledge_base backend.tests.test_graph_index backend.tests.test_python_repl backend.tests.test_agent backend.tests.test_api_chat -v` -> 27/27 OK
+- **Learnings for future iterations:**
+  - A typed config module is enough for interview value; adding another dependency just to mirror `pydantic-settings` can wait.
+  - Path settings should preserve test patchability by staying as module-level defaults in graph/search modules.
+  - Config docs are part of the feature because provider switching was already a real pain point in this project.
+---
+
+## 2026-07-16 LangSmith eval dataset sync / US-118
+- Mirrored the local eval datasets into LangSmith as an optional sync step while keeping local JSON/Markdown reports as the default source of truth.
+- Files changed:
+  - `backend/evals/langsmith_sync.py` (new — builds LangSmith client when configured, exports core task and retrieval datasets, skips safely when LangSmith is unavailable)
+  - `backend/evals/runner.py` (added `--langsmith-sync`, writes sync summary into JSON/Markdown reports)
+  - `backend/settings.py` (added LangSmith API key/endpoint/project settings with env fallbacks)
+  - `backend/requirements.txt` (pinned direct `langsmith==0.8.14`)
+  - `backend/tests/test_langsmith_sync.py` (new — sync creation, existing-dataset skip, and unconfigured fallback coverage)
+  - `backend/tests/test_eval_runner.py` and `backend/tests/test_settings.py` (LangSmith report and settings coverage)
+  - `docs/langsmith-evals.md` and `docs/runtime-configuration.md` (workflow and env var docs)
+  - `scripts/ralph/prd.json` (marked US-118 complete)
+- Verification:
+  - `.venv/bin/python -W ignore -m unittest backend.tests.test_langsmith_sync backend.tests.test_eval_runner backend.tests.test_settings -v` -> 24/24 OK
+  - `.venv/bin/python -W ignore -m unittest discover -s backend/tests -v` -> 114/114 OK
+  - `.venv/bin/python -m backend.evals.runner --dataset backend/evals/datasets/core_tasks.json --output /tmp/mini-openclaw-langsmith-eval.json --langsmith-sync` -> local report written, LangSmith sync summary recorded as disabled because no API key is configured
+- **Learnings for future iterations:**
+  - For an offline-first project, LangSmith is a good experiment sink, but the first safe step is dataset sync, not forcing live network calls into every eval run.
+  - Keeping local Markdown/JSON output intact makes the migration low-risk and easy to review; we can add `evaluate(...)` / `evaluate_existing(...)` later as a separate story.
+  - Sample IDs for LangSmith `ExampleCreate` use `id`, not `example_id` — worth remembering before the first real sync.
+---

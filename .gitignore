@@ -1,3 +1,43 @@
 .DS_Store
 .claude/
 *.pdf
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+
+# Mini-OpenClaw runtime artifacts
+backend/storage/
+backend/data/graph/
+backend/data/traces/
+backend/data/users/
+backend/evals/reports/
+backend/evals/benchmarks/
+backend/memory/logs/*.log
+backend/memory/memory_proposals.jsonl
+backend/memory/approved_memory/
+backend/sessions/*.json
+!backend/sessions/.gitkeep
+references/
+
+# Frontend
+node_modules/
+.next/
+.next-build/
+out/
+*.tsbuildinfo
+
+.env
+.runtime/
+Mini-OpenClaw-PRD.md

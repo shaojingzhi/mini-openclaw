@@ -1,6 +1,6 @@
 #!/bin/bash
 # Ralph Wiggum - Long-running AI agent loop
-# Usage: ./ralph.sh [--tool amp|claude] [max_iterations]
+# Usage: ./ralph.sh [--tool amp|claude|codex] [max_iterations]
 
 set -e
 
@@ -29,8 +29,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Validate tool choice
-if [[ "$TOOL" != "amp" && "$TOOL" != "claude" ]]; then
-  echo "Error: Invalid tool '$TOOL'. Must be 'amp' or 'claude'."
+if [[ "$TOOL" != "amp" && "$TOOL" != "claude" && "$TOOL" != "codex" ]]; then
+  echo "Error: Invalid tool '$TOOL'. Must be 'amp', 'claude', or 'codex'."
   exit 1
 fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -87,22 +87,41 @@ for i in $(seq 1 $MAX_ITERATIONS); do
   echo "  Ralph Iteration $i of $MAX_ITERATIONS ($TOOL)"
   echo "==============================================================="
 
-  # Run the selected tool with the ralph prompt
+  ITERATION_LOG=$(mktemp)
+  DIFF_BEFORE=$(mktemp)
+  DIFF_AFTER=$(mktemp)
+  git status --short > "$DIFF_BEFORE" 2>/dev/null || true
+
+  # Run the selected tool and stream output to both the console and the
+  # per-iteration log so external tail/watch commands see it immediately.
   if [[ "$TOOL" == "amp" ]]; then
-    OUTPUT=$(cat "$SCRIPT_DIR/prompt.md" | amp --dangerously-allow-all 2>&1 | tee /dev/stderr) || true
-  else
+    cat "$SCRIPT_DIR/prompt.md" | amp --dangerously-allow-all 2>&1 | tee "$ITERATION_LOG" || true
+  elif [[ "$TOOL" == "claude" ]]; then
     # Claude Code: use --dangerously-skip-permissions for autonomous operation, --print for output
-    OUTPUT=$(claude --dangerously-skip-permissions --print < "$SCRIPT_DIR/CLAUDE.md" 2>&1 | tee /dev/stderr) || true
+    claude --dangerously-skip-permissions --print < "$SCRIPT_DIR/CLAUDE.md" 2>&1 | tee "$ITERATION_LOG" || true
+  else
+    # Codex: run one printed iteration prompt from CODEX.md
+    codex exec --skip-git-repo-check - < "$SCRIPT_DIR/CODEX.md" 2>&1 | tee "$ITERATION_LOG" || true
   fi
-  
+
+  git status --short > "$DIFF_AFTER" 2>/dev/null || true
+  if ! cmp -s "$DIFF_BEFORE" "$DIFF_AFTER"; then
+    echo ""
+    echo "[ralph] git status changed during iteration $i:"
+    cat "$DIFF_AFTER"
+  fi
+
   # Check for completion signal
-  if echo "$OUTPUT" | grep -q "<promise>COMPLETE</promise>"; then
+  if grep -q "<promise>COMPLETE</promise>" "$ITERATION_LOG"; then
     echo ""
     echo "Ralph completed all tasks!"
     echo "Completed at iteration $i of $MAX_ITERATIONS"
+    rm -f "$ITERATION_LOG" "$DIFF_BEFORE" "$DIFF_AFTER"
     exit 0
   fi
-  
+
+  rm -f "$ITERATION_LOG" "$DIFF_BEFORE" "$DIFF_AFTER"
+
   echo "Iteration $i complete. Continuing..."
   sleep 2
 done

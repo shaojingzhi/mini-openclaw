@@ -1,0 +1,76 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: 32 43% 96%;
+  --foreground: 20 28% 15%;
+  --card: 36 71% 98%;
+  --card-foreground: 20 28% 15%;
+  --popover: 36 71% 98%;
+  --popover-foreground: 20 28% 15%;
+  --primary: 14 52% 47%;
+  --primary-foreground: 36 71% 98%;
+  --secondary: 35 36% 91%;
+  --secondary-foreground: 20 28% 15%;
+  --muted: 35 36% 91%;
+  --muted-foreground: 20 16% 40%;
+  --accent: 35 36% 91%;
+  --accent-foreground: 20 28% 15%;
+  --destructive: 0 84% 60%;
+  --destructive-foreground: 36 71% 98%;
+  --border: 29 30% 84%;
+  --input: 29 30% 84%;
+  --ring: 14 52% 47%;
+  --radius: 0.9rem;
+}
+
+* {
+  @apply border-border;
+}
+
+html {
+  background: #fbf5eb;
+}
+
+html,
+body,
+body > div:first-child {
+  min-height: 100%;
+}
+
+body {
+  @apply bg-background text-foreground antialiased;
+  min-height: 100vh;
+  font-family: "Avenir Next", "Hiragino Maru Gothic ProN", "PingFang SC", sans-serif;
+  background:
+    radial-gradient(circle at 4% 0%, rgba(247, 196, 142, 0.34), transparent 31rem),
+    radial-gradient(circle at 95% 7%, rgba(163, 205, 180, 0.27), transparent 28rem),
+    linear-gradient(180deg, #fffaf3 0%, #f5eadc 100%);
+}
+
+::selection {
+  background: rgba(201, 111, 74, 0.2);
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: rgba(126, 86, 65, 0.28);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(126, 86, 65, 0.43);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}

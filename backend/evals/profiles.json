@@ -1,0 +1,27 @@
+[
+  {
+    "id": "baseline",
+    "description": "Full capability baseline with memory, skills, and retrieval enabled.",
+    "disabled_capabilities": []
+  },
+  {
+    "id": "no_memory",
+    "description": "Ablation profile that disables memory-dependent behavior.",
+    "disabled_capabilities": ["memory"]
+  },
+  {
+    "id": "no_skills",
+    "description": "Ablation profile that disables skill-guided behavior.",
+    "disabled_capabilities": ["skills"]
+  },
+  {
+    "id": "no_retrieval",
+    "description": "Ablation profile that disables knowledge retrieval.",
+    "disabled_capabilities": ["retrieval"]
+  },
+  {
+    "id": "no_graph_retrieval",
+    "description": "Ablation profile that disables graph-assisted retrieval while keeping direct knowledge retrieval available.",
+    "disabled_capabilities": ["graph_retrieval"]
+  }
+]

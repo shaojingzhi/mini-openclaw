@@ -1,0 +1,129 @@
+[
+  {
+    "id": "rq-001",
+    "query": "How do eval notes connect to interview positioning for Mini-OpenClaw?",
+    "relevant_ids": [
+      "doc:evaluation-guidance",
+      "doc:interview-demo-pack",
+      "workspace:INTERVIEW_DEMO.md"
+    ],
+    "strategies": {
+      "baseline": [
+        "doc:evaluation-guidance",
+        "doc:failure-matrix",
+        "doc:readme",
+        "workspace:SKILLS_SNAPSHOT.md",
+        "skill:resume_story_coach"
+      ],
+      "graph_assisted": [
+        "doc:evaluation-guidance",
+        "doc:interview-demo-pack",
+        "workspace:INTERVIEW_DEMO.md",
+        "skill:resume_story_coach",
+        "tool:search_knowledge_base"
+      ]
+    }
+  },
+  {
+    "id": "rq-002",
+    "query": "Which surfaces help debug a failed Graph RAG retrieval demo?",
+    "relevant_ids": [
+      "doc:failure-matrix",
+      "trace:graph-retrieval",
+      "frontend:runtime-diagnostics",
+      "tool:search_knowledge_base"
+    ],
+    "strategies": {
+      "baseline": [
+        "doc:failure-matrix",
+        "tool:terminal",
+        "doc:readme",
+        "workspace:USER.md",
+        "skill:get_weather"
+      ],
+      "graph_assisted": [
+        "doc:failure-matrix",
+        "trace:graph-retrieval",
+        "frontend:runtime-diagnostics",
+        "tool:search_knowledge_base",
+        "doc:interview-demo-pack"
+      ]
+    }
+  },
+  {
+    "id": "rq-003",
+    "query": "Explain the Graph-RAG-inspired demo without overselling it as full GraphRAG.",
+    "relevant_ids": [
+      "doc:interview-demo-pack",
+      "workspace:INTERVIEW_DEMO.md",
+      "graph:knowledge_graph.json"
+    ],
+    "strategies": {
+      "baseline": [
+        "doc:interview-demo-pack",
+        "doc:readme",
+        "skill:resume_story_coach",
+        "tool:read_file",
+        "workspace:USER.md"
+      ],
+      "graph_assisted": [
+        "doc:interview-demo-pack",
+        "workspace:INTERVIEW_DEMO.md",
+        "graph:knowledge_graph.json",
+        "tool:search_knowledge_base",
+        "frontend:runtime-diagnostics"
+      ]
+    }
+  },
+  {
+    "id": "rq-004",
+    "query": "When should memory stay file-first versus using retrieval expansion?",
+    "relevant_ids": [
+      "workspace:MEMORY.md",
+      "doc:evaluation-guidance",
+      "tool:search_knowledge_base"
+    ],
+    "strategies": {
+      "baseline": [
+        "workspace:MEMORY.md",
+        "workspace:USER.md",
+        "doc:readme",
+        "tool:read_file",
+        "skill:interview_answer_builder"
+      ],
+      "graph_assisted": [
+        "workspace:MEMORY.md",
+        "tool:search_knowledge_base",
+        "doc:evaluation-guidance",
+        "doc:interview-demo-pack",
+        "graph:knowledge_graph.json"
+      ]
+    }
+  },
+  {
+    "id": "rq-005",
+    "query": "Which artifacts make the hiring demo repeatable end to end?",
+    "relevant_ids": [
+      "workspace:INTERVIEW_DEMO.md",
+      "doc:interview-demo-pack",
+      "skill:interview_answer_builder",
+      "skill:resume_story_coach"
+    ],
+    "strategies": {
+      "baseline": [
+        "workspace:INTERVIEW_DEMO.md",
+        "doc:readme",
+        "tool:terminal",
+        "workspace:SKILLS_SNAPSHOT.md",
+        "doc:failure-matrix"
+      ],
+      "graph_assisted": [
+        "workspace:INTERVIEW_DEMO.md",
+        "doc:interview-demo-pack",
+        "skill:interview_answer_builder",
+        "skill:resume_story_coach",
+        "frontend:runtime-diagnostics"
+      ]
+    }
+  }
+]
